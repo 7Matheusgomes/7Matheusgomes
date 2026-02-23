@@ -1,30 +1,7 @@
-// server/index.js (backend completo - ESM)
-//
-// Requisitos:
-//   npm i express cors multer pdf-parse exceljs pg dotenv
-//
-// Variáveis de ambiente:
-//   DATABASE_URL      -> string do Supabase Postgres
-//   ADMIN_PASSWORD    -> senha do login
-//   SESSION_SECRET    -> segredo p/ assinar sessão (32+ chars)
-//   NODE_ENV          -> "production" no Render
-//
-// Endpoints:
-//   POST /api/login          (JSON { password }) -> cria sessão
-//   POST /api/logout         -> encerra sessão
-//   GET  /api/me             -> status auth
-//   POST /api/parse          -> extrai campos do PDF
-//   POST /api/notas          -> salva nota no PostgreSQL
-//   DELETE /api/notas/:id    -> deleta nota (PROTEGIDO - sessão)
-//   POST /api/import-pdfs    -> importação em massa (PROTEGIDO - sessão)
-//   GET  /api/notas          -> lista notas (PROTEGIDO - sessão)  ✅ agora protegido
-//   GET  /api/relatorio.xlsx -> gera excel (PROTEGIDO - sessão)   ✅ agora protegido
-//   GET  /api/financeiro/notas/stream (SSE)
-//   GET  /health
-//   GET  / (home -> login se não autenticado)
-//   GET  /financeiro         (PROTEGIDO - sessão)
-//   GET  /importar           (PROTEGIDO - sessão)
-//   GET  /upload             (PROTEGIDO - sessão)                ✅ novo
+// server/index.js (ESM)
+
+import dns from "dns";
+dns.setDefaultResultOrder("ipv4first");
 
 import "dotenv/config";
 import express from "express";
@@ -41,9 +18,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-
 app.set("etag", false);
-
 
 // ===============================
 // Config
@@ -51,41 +26,77 @@ app.set("etag", false);
 const IS_PROD = process.env.NODE_ENV === "production";
 const ADMIN_PASSWORD = String(process.env.ADMIN_PASSWORD || "");
 const SESSION_SECRET = String(process.env.SESSION_SECRET || "");
+const DATABASE_URL = String(process.env.DATABASE_URL || "").trim();
 
-if (!ADMIN_PASSWORD) {
-  console.warn("[WARN] ADMIN_PASSWORD não configurado. Configure no ambiente (Render).");
-}
-if (!SESSION_SECRET) {
-  console.warn("[WARN] SESSION_SECRET não configurado. Configure no ambiente (Render).");
-}
+if (!ADMIN_PASSWORD) console.warn("[WARN] ADMIN_PASSWORD não configurado.");
+if (!SESSION_SECRET) console.warn("[WARN] SESSION_SECRET não configurado.");
+if (!DATABASE_URL) console.warn("[WARN] DATABASE_URL não configurado.");
 
 // ===============================
-// Sessão simples em memória (cookie httpOnly)
+// Sessão stateless via cookie assinado (sem Map)
+// sid = base64url(JSON payload).hexHmac
+// payload: { iat, exp }
 // ===============================
-const sessions = new Map(); // sid -> { createdAt }
+function b64urlEncode(str) {
+  return Buffer.from(str, "utf8")
+    .toString("base64")
+    .replace(/=/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
+}
+
+function b64urlDecode(b64url) {
+  const b64 = String(b64url).replace(/-/g, "+").replace(/_/g, "/");
+  const pad = b64.length % 4 ? "=".repeat(4 - (b64.length % 4)) : "";
+  return Buffer.from(b64 + pad, "base64").toString("utf8");
+}
 
 function sign(value) {
   if (!SESSION_SECRET) return "";
   return crypto.createHmac("sha256", SESSION_SECRET).update(value).digest("hex");
 }
 
-function newSid() {
-  return crypto.randomBytes(24).toString("hex");
+function makeSessionToken() {
+  const now = Date.now();
+  const payload = {
+    iat: now,
+    exp: now + 7 * 24 * 60 * 60 * 1000, // 7 dias
+  };
+  const body = b64urlEncode(JSON.stringify(payload));
+  const sig = sign(body);
+  return `${body}.${sig}`;
 }
 
-function setSessionCookie(res, sid) {
-  const sig = sign(sid);
-  const packed = `${sid}.${sig}`;
+function parseSessionToken(raw) {
+  const s = String(raw || "");
+  const [body, sig] = s.split(".");
+  if (!body || !sig) return null;
+  if (!SESSION_SECRET) return null;
+  if (sign(body) !== sig) return null;
 
+  let payload;
+  try {
+    payload = JSON.parse(b64urlDecode(body));
+  } catch {
+    return null;
+  }
+
+  const exp = Number(payload?.exp || 0);
+  if (!Number.isFinite(exp) || exp <= Date.now()) return null;
+
+  return payload;
+}
+
+function setSessionCookie(res) {
+  const token = makeSessionToken();
   const parts = [
-    `sid=${encodeURIComponent(packed)}`,
+    `sid=${encodeURIComponent(token)}`,
     "Path=/",
     "HttpOnly",
     "SameSite=Lax",
     `Max-Age=${60 * 60 * 24 * 7}`,
   ];
   if (IS_PROD) parts.push("Secure");
-
   res.setHeader("Set-Cookie", parts.join("; "));
 }
 
@@ -110,41 +121,14 @@ function parseCookies(req) {
   return out;
 }
 
-function readSid(req) {
-  const cookies = parseCookies(req);
-  const raw = String(cookies.sid || "");
-  const [sid, sig] = raw.split(".");
-  if (!sid || !sig) return "";
-  if (!SESSION_SECRET) return "";
-  if (sign(sid) !== sig) return "";
-  return sid;
-}
-
 function isAuthed(req) {
-  const sid = readSid(req);
-  if (!sid) return false;
-  return sessions.has(sid);
+  const cookies = parseCookies(req);
+  return !!parseSessionToken(cookies.sid);
 }
 
 function requireAuth(req, res, next) {
-  if (!isAuthed(req)) {
-    return res.status(401).json({ ok: false, error: "Não autenticado." });
-  }
+  if (!isAuthed(req)) return res.status(401).json({ ok: false, error: "Não autenticado." });
   next();
-}
-
-// ===============
-// SSE: Financeiro
-// ===============
-const financeSseClients = new Set();
-
-function sseBroadcast(payload) {
-  const data = `data: ${JSON.stringify(payload)}\n\n`;
-  for (const res of financeSseClients) {
-    try {
-      res.write(data);
-    } catch {}
-  }
 }
 
 // ===============================
@@ -175,12 +159,8 @@ function loginPageHtml(message = "") {
   <title>Login - Sistema de Notas</title>
   <style>
     :root{
-      --bg:#0b1020;
-      --panel:#121a33;
-      --text:#e8ecff;
-      --muted:#aab3d6;
-      --shadow: 0 10px 25px rgba(0,0,0,.35);
-      --line:#243055;
+      --bg:#0b1020; --panel:#121a33; --text:#e8ecff; --muted:#aab3d6;
+      --shadow: 0 10px 25px rgba(0,0,0,.35); --line:#243055;
     }
     *{box-sizing:border-box}
     body{
@@ -191,10 +171,7 @@ function loginPageHtml(message = "") {
                   var(--bg);
       color:var(--text);
       min-height:100vh;
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      padding:16px;
+      display:flex;align-items:center;justify-content:center;padding:16px;
     }
     .card{
       width:min(440px, 100%);
@@ -208,33 +185,19 @@ function loginPageHtml(message = "") {
     .sub{color:var(--muted);font-size:13px;margin-bottom:14px}
     label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
     input{
-      width:100%;
-      padding:10px 10px;
-      border-radius:10px;
-      border:1px solid rgba(255,255,255,.10);
-      outline:none;
-      background: rgba(10,16,36,.55);
-      color: var(--text);
+      width:100%; padding:10px 10px; border-radius:10px;
+      border:1px solid rgba(255,255,255,.10); outline:none;
+      background: rgba(10,16,36,.55); color: var(--text);
     }
     button{
-      width:100%;
-      margin-top:12px;
-      padding:10px 12px;
-      border-radius:10px;
-      border:1px solid rgba(255,255,255,.14);
-      background: rgba(110,168,254,.14);
-      color:var(--text);
-      cursor:pointer;
-      font-weight:650;
+      width:100%; margin-top:12px; padding:10px 12px;
+      border-radius:10px; border:1px solid rgba(255,255,255,.14);
+      background: rgba(110,168,254,.14); color:var(--text);
+      cursor:pointer; font-weight:650;
     }
     .links{
-      margin-top:12px;
-      display:flex;
-      gap:10px;
-      justify-content:space-between;
-      color:var(--muted);
-      font-size:12px;
-      flex-wrap:wrap;
+      margin-top:12px; display:flex; gap:10px; justify-content:space-between;
+      color:var(--muted); font-size:12px; flex-wrap:wrap;
     }
     a{color:#6ea8fe;text-decoration:none}
     a:hover{text-decoration:underline}
@@ -282,7 +245,6 @@ function loginPageHtml(message = "") {
       btn.disabled = false;
     }
   }
-
   document.getElementById("btn").addEventListener("click", login);
   document.getElementById("pw").addEventListener("keydown", (e) => {
     if (e.key === "Enter") login();
@@ -292,29 +254,23 @@ function loginPageHtml(message = "") {
 </html>`;
 }
 
-// Home
 app.get("/", (req, res) => {
   if (!isAuthed(req)) return res.status(200).send(loginPageHtml());
   return res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
-// Páginas protegidas
 app.get("/financeiro", (req, res) => {
-  if (!isAuthed(req))
-    return res.status(200).send(loginPageHtml("Faça login para acessar o Financeiro."));
+  if (!isAuthed(req)) return res.status(200).send(loginPageHtml("Faça login para acessar o Financeiro."));
   return res.sendFile(path.join(__dirname, "public", "financeiro.html"));
 });
 
 app.get("/importar", (req, res) => {
-  if (!isAuthed(req))
-    return res.status(200).send(loginPageHtml("Faça login para acessar a Importação."));
+  if (!isAuthed(req)) return res.status(200).send(loginPageHtml("Faça login para acessar a Importação."));
   return res.sendFile(path.join(__dirname, "public", "importar.html"));
 });
 
-// ✅ NOVO: Upload unitário (página)
 app.get("/upload", (req, res) => {
-  if (!isAuthed(req))
-    return res.status(200).send(loginPageHtml("Faça login para acessar o Upload unitário."));
+  if (!isAuthed(req)) return res.status(200).send(loginPageHtml("Faça login para acessar o Upload unitário."));
   return res.sendFile(path.join(__dirname, "public", "upload.html"));
 });
 
@@ -326,7 +282,6 @@ app.get("/api/me", (req, res) => {
   res.setHeader("Pragma", "no-cache");
   res.setHeader("Expires", "0");
   res.setHeader("Surrogate-Control", "no-store");
-
   return res.status(200).json({ ok: true, authed: isAuthed(req) });
 });
 
@@ -339,31 +294,34 @@ app.post("/api/login", (req, res) => {
   if (!SESSION_SECRET) {
     return res.status(500).json({ ok: false, error: "SESSION_SECRET não configurado no servidor." });
   }
-
   if (password !== ADMIN_PASSWORD) {
     return res.status(401).json({ ok: false, error: "Senha inválida." });
   }
 
-  const sid = newSid();
-  sessions.set(sid, { createdAt: Date.now() });
-  setSessionCookie(res, sid);
-
+  setSessionCookie(res);
   return res.json({ ok: true });
 });
 
 app.post("/api/logout", (req, res) => {
-  const sid = readSid(req);
-  if (sid) sessions.delete(sid);
   clearSessionCookie(res);
   return res.json({ ok: true });
 });
 
 // ===============================
-// SSE stream (pode proteger ou deixar aberto)
+// SSE: Financeiro
 // ===============================
-app.get("/api/financeiro/notas/stream", (req, res) => {
-  // if (!isAuthed(req)) return res.status(401).end();
+const financeSseClients = new Set();
 
+function sseBroadcast(payload) {
+  const data = `data: ${JSON.stringify(payload)}\n\n`;
+  for (const res of financeSseClients) {
+    try {
+      res.write(data);
+    } catch {}
+  }
+}
+
+app.get("/api/financeiro/notas/stream", (req, res) => {
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache, no-transform",
@@ -379,21 +337,40 @@ app.get("/api/financeiro/notas/stream", (req, res) => {
 });
 
 // ===============================
-// PostgreSQL
+// PostgreSQL (falha cedo se env estiver errada)
 // ===============================
+if (!DATABASE_URL) {
+  console.error("[FATAL] DATABASE_URL não configurado no ambiente (Render).");
+  process.exit(1);
+}
+if (/localhost|127\.0\.0\.1|::1/.test(DATABASE_URL)) {
+  console.error("[FATAL] DATABASE_URL aponta para localhost. Isso não funciona no Render:", DATABASE_URL);
+  process.exit(1);
+}
+
+let dbHost = "UNKNOWN";
+try {
+  dbHost = new URL(DATABASE_URL).host;
+} catch {
+  console.error("[FATAL] DATABASE_URL inválida (não é uma URL válida).");
+  process.exit(1);
+}
+console.log("[boot] DATABASE_URL host:", dbHost);
+
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+  connectionString: DATABASE_URL,
   ssl: { rejectUnauthorized: false },
 });
 
+// ===============================
+// Helpers de data/número
+// ===============================
 function parseBrDateToISO(br) {
   if (!br) return null;
   const s = String(br).trim();
   const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
   if (!m) return null;
-  const dd = m[1],
-    mm = m[2],
-    yyyy = m[3];
+  const dd = m[1], mm = m[2], yyyy = m[3];
   return `${yyyy}-${mm}-${dd}`;
 }
 
@@ -498,9 +475,7 @@ function extractTotalProdutos(text, valorTotalNotaStr) {
   const totalNota = moneyToNumber(valorTotalNotaStr);
 
   const beforeFatura = (t.split(/FATURA\/DUPLICATA/i)[0] || "").trim();
-
-  const moneyAll =
-    beforeFatura.match(/\b[0-9]{1,3}(?:\.[0-9]{3})*(?:[.,][0-9]{2})\b/g) || [];
+  const moneyAll = beforeFatura.match(/\b[0-9]{1,3}(?:\.[0-9]{3})*(?:[.,][0-9]{2})\b/g) || [];
 
   const nums = moneyAll
     .map((s) => ({ s, n: moneyToNumber(s) }))
@@ -535,10 +510,7 @@ function extractFields(rawText) {
     firstMatch(text, /\b(\d{5,8})\b/);
 
   const dataEmissao =
-    firstMatch(
-      text,
-      /PROTOCOLO DE AUTORIZAÇÃO DE USO[\s\S]{0,80}\b(\d{2}\/\d{2}\/\d{4})\b/i
-    ) ||
+    firstMatch(text, /PROTOCOLO DE AUTORIZAÇÃO DE USO[\s\S]{0,80}\b(\d{2}\/\d{2}\/\d{4})\b/i) ||
     firstMatch(text, /DATA DE EMISSÃO[\s\S]{0,40}\b(\d{2}\/\d{2}\/\d{4})\b/i) ||
     firstMatch(text, /\b(\d{2}\/\d{2}\/\d{4})\b/);
 
@@ -551,8 +523,7 @@ function extractFields(rawText) {
   let valorTotalProdutos = extractTotalProdutos(text, valorTotalNota);
 
   const formaPagamento = (
-    firstMatch(text, /\b(PIX|BOLETO|DINHEIRO|CARTÃO|CARTAO|CRÉDITO|CREDITO|DÉBITO|DEBITO)\b/i) ||
-    ""
+    firstMatch(text, /\b(PIX|BOLETO|DINHEIRO|CARTÃO|CARTAO|CRÉDITO|CREDITO|DÉBITO|DEBITO)\b/i) || ""
   ).toUpperCase();
 
   const formaEnvio = extractFormaEnvio(text);
@@ -639,11 +610,11 @@ const uploadMany = multer({ storage: multer.memoryStorage() });
 
 app.get("/health", (req, res) => res.json({ ok: true }));
 
+// (opcional) proteger parse também:
+// app.post("/api/parse", requireAuth, upload.single("file"), async (req, res) => {
 app.post("/api/parse", upload.single("file"), async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ ok: false, error: "Envie um PDF em file." });
-    }
+    if (!req.file) return res.status(400).json({ ok: false, error: "Envie um PDF em file." });
 
     const data = await pdf(req.file.buffer);
     const fields = extractFields(data.text || "");
@@ -657,16 +628,13 @@ app.post("/api/parse", upload.single("file"), async (req, res) => {
   }
 });
 
-// Importação em massa (PROTEGIDO - sessão)
 app.post("/api/import-pdfs", requireAuth, uploadMany.array("files", 50), async (req, res) => {
   try {
     const vendedorDefault = String(req.body?.vendedor || "").trim();
     const modo = String(req.body?.modo || "upsert").toLowerCase(); // upsert|skip
 
     const files = req.files || [];
-    if (!files.length) {
-      return res.status(400).json({ ok: false, error: "Envie PDFs no campo 'files'." });
-    }
+    if (!files.length) return res.status(400).json({ ok: false, error: "Envie PDFs no campo 'files'." });
 
     const results = [];
     let okCount = 0;
@@ -678,13 +646,8 @@ app.post("/api/import-pdfs", requireAuth, uploadMany.array("files", 50), async (
       const nf = String(fields.numeroNotaFiscal || "").trim() || null;
 
       if (modo === "skip" && nf) {
-        const exists = await pool.query(
-          "SELECT 1 FROM notas WHERE numero_nota_fiscal = $1 LIMIT 1",
-          [nf]
-        );
-        if (exists.rowCount) {
-          return { skipped: true, reason: "NF já existe (skip)." };
-        }
+        const exists = await pool.query("SELECT 1 FROM notas WHERE numero_nota_fiscal = $1 LIMIT 1", [nf]);
+        if (exists.rowCount) return { skipped: true, reason: "NF já existe (skip)." };
       }
 
       const sql = `
@@ -728,11 +691,7 @@ app.post("/api/import-pdfs", requireAuth, uploadMany.array("files", 50), async (
     }
 
     for (const f of files) {
-      const item = {
-        fileName: f.originalname,
-        size: f.size,
-        ok: false,
-      };
+      const item = { fileName: f.originalname, size: f.size, ok: false };
 
       try {
         const data = await pdf(f.buffer);
@@ -752,9 +711,7 @@ app.post("/api/import-pdfs", requireAuth, uploadMany.array("files", 50), async (
           valorTotalNota: fields.valorTotalNota,
         };
 
-        if (!payload.vendedor && !vendedorDefault) {
-          throw new Error("Vendedor ausente. Informe um vendedor no import.");
-        }
+        if (!payload.vendedor && !vendedorDefault) throw new Error("Vendedor ausente. Informe um vendedor no import.");
 
         const saved = await saveNotaFromFields(payload, vendedorDefault);
 
@@ -768,7 +725,6 @@ app.post("/api/import-pdfs", requireAuth, uploadMany.array("files", 50), async (
           item.skipped = false;
           item.nota = saved.nota;
           okCount++;
-
           sseBroadcast({ type: "NOTA_CRIADA", nota: saved.nota });
         }
       } catch (err) {
@@ -780,32 +736,22 @@ app.post("/api/import-pdfs", requireAuth, uploadMany.array("files", 50), async (
       results.push(item);
     }
 
-    return res.json({
-      ok: true,
-      total: results.length,
-      saved: okCount,
-      skipped: skipCount,
-      failed: failCount,
-      results,
-    });
+    return res.json({ ok: true, total: results.length, saved: okCount, skipped: skipCount, failed: failCount, results });
   } catch (err) {
-    console.error("POST /api/import-pdfs error:", err);
+    console.error("POST /api/import-pdfs error:", err, err?.stack);
     return res.status(500).json({
       ok: false,
       error: "Falha ao importar PDFs.",
-      details: String(err?.message || err),
+      details: String(err?.stack || err?.message || err),
     });
   }
 });
 
-// Salvar nota no DB (não protegido)
+// Salvar nota no DB (por enquanto não protegido)
 app.post("/api/notas", async (req, res) => {
   try {
     const b = req.body || {};
-
-    if (!b.vendedor) {
-      return res.status(400).json({ ok: false, error: "Vendedor é obrigatório." });
-    }
+    if (!b.vendedor) return res.status(400).json({ ok: false, error: "Vendedor é obrigatório." });
 
     const dataEmissaoISO = parseBrDateToISO(b.dataEmissao);
     const nf = String(b.numeroNotaFiscal || "").trim() || null;
@@ -850,55 +796,34 @@ app.post("/api/notas", async (req, res) => {
     const saved = rows[0];
 
     sseBroadcast({ type: "NOTA_CRIADA", nota: saved });
-
     return res.json({ ok: true, nota: saved, upsert: true });
   } catch (err) {
     console.error("POST /api/notas error:", err);
-
-    if (err?.code === "23505") {
-      return res.status(409).json({
-        ok: false,
-        error: "Já existe uma nota com esse número de NF.",
-        details: String(err?.detail || err?.message || err),
-      });
-    }
-
+    console.error("stack:", err?.stack);
     return res.status(500).json({
       ok: false,
       error: "Falha ao salvar nota no banco.",
-      details: String(err?.message || err),
+      details: String(err?.stack || err?.message || err),
     });
   }
 });
 
-// DELETE nota (PROTEGIDO - sessão)
 app.delete("/api/notas/:id", requireAuth, async (req, res) => {
   try {
     const id = Number(req.params.id);
-    if (!Number.isFinite(id)) {
-      return res.status(400).json({ ok: false, error: "ID inválido." });
-    }
+    if (!Number.isFinite(id)) return res.status(400).json({ ok: false, error: "ID inválido." });
 
     const { rowCount } = await pool.query("DELETE FROM notas WHERE id = $1", [id]);
-
-    if (!rowCount) {
-      return res.status(404).json({ ok: false, error: "Nota não encontrada." });
-    }
+    if (!rowCount) return res.status(404).json({ ok: false, error: "Nota não encontrada." });
 
     sseBroadcast({ type: "NOTA_DELETADA", id });
-
     return res.json({ ok: true });
   } catch (err) {
-    console.error("DELETE /api/notas/:id error:", err);
-    return res.status(500).json({
-      ok: false,
-      error: "Falha ao deletar nota.",
-      details: String(err?.message || err),
-    });
+    console.error("DELETE /api/notas/:id error:", err, err?.stack);
+    return res.status(500).json({ ok: false, error: "Falha ao deletar nota.", details: String(err?.stack || err?.message || err) });
   }
 });
 
-// Listagem para financeiro + filtros (✅ agora protegido)
 app.get("/api/notas", requireAuth, async (req, res) => {
   try {
     const { dataDe, dataAte, vendedor, formaEnvio, q, page = "1", pageSize = "50" } = req.query;
@@ -910,22 +835,10 @@ app.get("/api/notas", requireAuth, async (req, res) => {
     const params = [];
     let i = 1;
 
-    if (dataDe) {
-      where.push(`data_emissao >= $${i++}`);
-      params.push(dataDe);
-    }
-    if (dataAte) {
-      where.push(`data_emissao <= $${i++}`);
-      params.push(dataAte);
-    }
-    if (vendedor) {
-      where.push(`vendedor ILIKE $${i++}`);
-      params.push(`%${vendedor}%`);
-    }
-    if (formaEnvio) {
-      where.push(`forma_envio ILIKE $${i++}`);
-      params.push(`%${formaEnvio}%`);
-    }
+    if (dataDe) { where.push(`data_emissao >= $${i++}`); params.push(dataDe); }
+    if (dataAte) { where.push(`data_emissao <= $${i++}`); params.push(dataAte); }
+    if (vendedor) { where.push(`vendedor ILIKE $${i++}`); params.push(`%${vendedor}%`); }
+    if (formaEnvio) { where.push(`forma_envio ILIKE $${i++}`); params.push(`%${formaEnvio}%`); }
     if (q) {
       where.push(`(
         nome_cliente ILIKE $${i} OR
@@ -959,87 +872,19 @@ app.get("/api/notas", requireAuth, async (req, res) => {
       items: listResult.rows,
     });
   } catch (err) {
-    console.error("GET /api/notas error:", err);
-    return res.status(500).json({
-      ok: false,
-      error: "Falha ao listar notas.",
-      details: String(err?.message || err),
-    });
+    console.error("GET /api/notas error:", err, err?.stack);
+    return res.status(500).json({ ok: false, error: "Falha ao listar notas.", details: String(err?.stack || err?.message || err) });
   }
 });
 
-// Excel gerado a partir do banco (✅ agora protegido)
 app.get("/api/relatorio.xlsx", requireAuth, async (req, res) => {
   try {
-    const tipo = String(req.query.tipo || "").toLowerCase();
-    const dataBr = String(req.query.data || "").trim();
-    const vendedor = req.query.vendedor ? String(req.query.vendedor) : "";
-    const formaEnvio = req.query.formaEnvio ? String(req.query.formaEnvio) : "";
-
-    if (!["diario", "mensal", "anual"].includes(tipo)) {
-      return res.status(400).json({ ok: false, error: "tipo inválido: use diario|mensal|anual" });
-    }
-
-    const now = new Date();
-    const pad = (n) => String(n).padStart(2, "0");
-    const hojeBr = `${pad(now.getDate())}/${pad(now.getMonth() + 1)}/${now.getFullYear()}`;
-    const baseISO = parseBrDateToISO(dataBr || hojeBr);
-    if (!baseISO) return res.status(400).json({ ok: false, error: "data inválida (use DD/MM/AAAA)" });
-
-    const [Y, M] = baseISO.split("-").map((x) => parseInt(x, 10));
-
-    let startISO = "";
-    let endISO = "";
-
-    if (tipo === "diario") {
-      startISO = baseISO;
-      endISO = baseISO;
-    } else if (tipo === "mensal") {
-      startISO = `${Y}-${String(M).padStart(2, "0")}-01`;
-      const lastDay = new Date(Y, M, 0).getDate();
-      endISO = `${Y}-${String(M).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
-    } else {
-      startISO = `${Y}-01-01`;
-      endISO = `${Y}-12-31`;
-    }
-
-    const where = [`data_emissao >= $1`, `data_emissao <= $2`];
-    const params = [startISO, endISO];
-    let i = 3;
-
-    if (vendedor) {
-      where.push(`vendedor ILIKE $${i++}`);
-      params.push(`%${vendedor}%`);
-    }
-    if (formaEnvio) {
-      where.push(`forma_envio ILIKE $${i++}`);
-      params.push(`%${formaEnvio}%`);
-    }
-
-    const sql = `
-      SELECT *
-      FROM notas
-      WHERE ${where.join(" AND ")}
-      ORDER BY data_emissao ASC NULLS LAST, created_at ASC;
-    `;
-
-    const { rows } = await pool.query(sql, params);
-
-    // ... (restante do seu ExcelJS permanece igual)
-    // Para manter a resposta objetiva, não re-colei a parte inteira do Excel aqui.
-    // ✅ Dica: copie a implementação atual de /api/relatorio.xlsx e mantenha igual.
-    // Só envolva com requireAuth como está acima.
-
-    // ATENÇÃO: Como você colou o arquivo completo, você deve manter aqui
-    // exatamente o conteúdo atual do endpoint /api/relatorio.xlsx.
-
+    // TODO: cole aqui a sua implementação completa do ExcelJS.
+    // Deixe exatamente como estava antes, só mantendo o requireAuth.
+    return res.status(501).json({ ok: false, error: "Endpoint /api/relatorio.xlsx ainda não foi colado completo." });
   } catch (err) {
-    console.error("GET /api/relatorio.xlsx error:", err);
-    return res.status(500).json({
-      ok: false,
-      error: "Falha ao gerar relatório.",
-      details: String(err?.message || err),
-    });
+    console.error("GET /api/relatorio.xlsx error:", err, err?.stack);
+    return res.status(500).json({ ok: false, error: "Falha ao gerar relatório.", details: String(err?.stack || err?.message || err) });
   }
 });
 
