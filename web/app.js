@@ -1,8 +1,8 @@
 // app.js (pronto e robusto)
 
-const API_PARSE_URL = "http://localhost:3001/api/parse";
-const API_SALVAR_URL = "http://localhost:3001/api/notas";
-const API_RELATORIO_URL = "http://localhost:3001/api/relatorio.xlsx";
+const API_PARSE_URL = "/api/parse";
+const API_SALVAR_URL = "/api/notas";
+const API_RELATORIO_URL = "/api/relatorio.xlsx";
 
 const $ = (id) => document.getElementById(id);
 
