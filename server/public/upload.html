@@ -1,112 +1,461 @@
+```html
 <!doctype html>
 <html lang="pt-BR">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Leitor de PDF → Formulário</title>
-  <link rel="stylesheet" href="./style.css" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Upload unitário - Notas</title>
+  <style>
+    :root{
+      --bg:#0b1020;
+      --panel:#121a33;
+      --text:#e8ecff;
+      --muted:#aab3d6;
+      --shadow: 0 10px 25px rgba(0,0,0,.35);
+      --line:#243055;
+      --accent:#6ea8fe;
+      --accent2: rgba(110,168,254,.14);
+      --ok:#3ddc97;
+      --warn:#ffcc66;
+      --bad:#ff6b6b;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, "Noto Sans";
+      background: radial-gradient(1200px 600px at 20% 0%, #172350 0%, transparent 50%),
+                  radial-gradient(900px 500px at 100% 20%, #1a2a66 0%, transparent 55%),
+                  var(--bg);
+      color:var(--text);
+      min-height:100vh;
+    }
+    .wrap{max-width:1100px;margin:22px auto;padding:0 16px}
+    header{
+      display:flex;
+      align-items:flex-end;
+      justify-content:space-between;
+      gap:12px;
+      flex-wrap:wrap;
+      margin-bottom:14px;
+    }
+    h1{margin:0;font-size:22px}
+    .sub{margin-top:6px;color:var(--muted);font-size:13px}
+    .nav{
+      display:flex;gap:10px;flex-wrap:wrap;align-items:center;
+    }
+    a.navlink{
+      display:inline-flex;
+      align-items:center;
+      padding:8px 10px;
+      border-radius:10px;
+      border:1px solid rgba(255,255,255,.10);
+      background: rgba(255,255,255,.06);
+      color: var(--text);
+      text-decoration:none;
+      font-size:13px;
+    }
+    a.navlink:hover{border-color: rgba(110,168,254,.35)}
+    .panel{
+      background: linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));
+      border:1px solid rgba(255,255,255,.08);
+      border-radius:14px;
+      box-shadow: var(--shadow);
+    }
+    .card{padding:14px}
+    .grid{
+      display:grid;
+      grid-template-columns: 1.15fr .85fr;
+      gap:12px;
+      align-items:start;
+    }
+    @media (max-width: 940px){
+      .grid{grid-template-columns: 1fr;}
+    }
+
+    .sectionTitle{
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      gap:10px;
+      flex-wrap:wrap;
+      margin-bottom:10px;
+    }
+    .sectionTitle h2{
+      margin:0;
+      font-size:14px;
+      letter-spacing:.2px;
+    }
+    .hint{color:var(--muted);font-size:12px;margin-top:4px;line-height:1.35}
+
+    label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
+    input, select{
+      width:100%;
+      padding:10px 10px;
+      border-radius:10px;
+      border:1px solid rgba(255,255,255,.10);
+      outline:none;
+      background: rgba(10,16,36,.55);
+      color: var(--text);
+    }
+    input::placeholder{color:#7f89b3}
+
+    .row{display:flex;gap:12px;flex-wrap:wrap}
+    .col{flex:1;min-width:220px}
+    .col.small{flex:0.7;min-width:170px}
+
+    .drop{
+      border:1px dashed rgba(255,255,255,.18);
+      background: rgba(0,0,0,.10);
+      border-radius:12px;
+      padding:14px;
+    }
+    .actions{display:flex;gap:10px;flex-wrap:wrap}
+    button{
+      padding:10px 12px;
+      border-radius:10px;
+      border:1px solid rgba(255,255,255,.14);
+      background: var(--accent2);
+      color:var(--text);
+      cursor:pointer;
+      font-weight:650;
+    }
+    button.secondary{background: rgba(255,255,255,.06)}
+    button:disabled{opacity:.6;cursor:not-allowed}
+
+    .mono{font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace}
+    .statusBox .kv{
+      display:grid;
+      grid-template-columns: 140px 1fr;
+      gap:8px 10px;
+      align-items:center;
+      margin-top:8px;
+    }
+    .k{color:var(--muted);font-size:12px}
+    .v{font-size:13px}
+    .ok{color:var(--ok)}
+    .warn{color:var(--warn)}
+    .bad{color:var(--bad)}
+
+    details{
+      margin-top:10px;
+      border:1px solid rgba(255,255,255,.08);
+      border-radius:12px;
+      background: rgba(0,0,0,.10);
+      padding:10px 12px;
+    }
+    summary{cursor:pointer;color:var(--text);font-weight:650;font-size:13px}
+    pre{
+      margin:10px 0 0 0;
+      max-height:240px;
+      overflow:auto;
+      white-space:pre-wrap;
+      word-break:break-word;
+      color:var(--muted);
+      font-size:12px;
+    }
+
+    /* Menu flutuante (se você usa) */
+    .floating-download{
+      position:fixed;
+      right:16px;
+      bottom:16px;
+      z-index:9999;
+    }
+    .fd-btn{
+      padding:10px 12px;
+      border-radius:12px;
+      border:1px solid rgba(255,255,255,.14);
+      background: rgba(18,26,51,.92);
+      color: var(--text);
+      box-shadow: var(--shadow);
+    }
+    .fd-menu{
+      margin-top:8px;
+      background: rgba(18,26,51,.92);
+      border:1px solid rgba(255,255,255,.10);
+      border-radius:12px;
+      overflow:hidden;
+      box-shadow: var(--shadow);
+      display:flex;
+      flex-direction:column;
+      min-width:180px;
+    }
+    .fd-item{
+      text-align:left;
+      background: transparent;
+      border:0;
+      border-bottom:1px solid rgba(255,255,255,.08);
+      color: var(--text);
+      padding:10px 12px;
+      cursor:pointer;
+      font-weight:600;
+    }
+    .fd-item:last-child{border-bottom:0}
+    .fd-item:hover{background: rgba(110,168,254,.10)}
+  </style>
 </head>
+
 <body>
-  <main class="container">
-    <h1>PDF → Texto → Campos</h1>
-
-    <section class="card">
-      <h2>1) Vendedor (manual)</h2>
-      <label>
-        Vendedor
-        <select id="vendedor" required>
-          <option value="" selected disabled>Selecione...</option>
-          <option>Matheus</option>
-          <option>Bruna</option>
-          <option>Vanessa</option>
-          <option>Denise</option>
-          <option>Priscila</option>
-        </select>
-      </label>
-    </section>
-
-    <section class="card">
-      <h2>2) Enviar PDF</h2>
-      <input id="file" type="file" accept="application/pdf" />
-      <button id="btnProcessar" type="button">Processar PDF</button>
-      <p class="hint">Dica: se o PDF for escaneado, vai precisar de OCR (podemos adicionar depois).</p>
-    </section>
-
-    <section class="card">
-      <h2>3) Campos (auto + revisão)</h2>
-
-      <div class="grid">
-        <label>Nome do cliente
-          <input id="nomeCliente" type="text" />
-        </label>
-
-        <label>Número da Nota fiscal
-          <input id="numeroNotaFiscal" type="text" />
-        </label>
-
-        <label>Forma de envio
-          <input id="formaEnvio" type="text" />
-        </label>
-
-        <label>Valor do envio
-          <input id="valorEnvio" type="text" placeholder="Ex: 29,90" />
-        </label>
-
-        <label>Pacote
-          <select id="pacote">
-            <option value="" selected>Selecione...</option>
-            <option value="Sacola">Sacola</option>
-            <option value="Caixa P">Caixa P</option>
-            <option value="Caixa M">Caixa M</option>
-            <option value="Caixa G">Caixa G</option>
-            <option value="Caixa GG">Caixa GG</option>
-            <option value="Caixa XXG">Caixa XXG</option>
-          </select>
-        </label>
-
-        <label>Forma de pagamento
-          <input id="formaPagamento" type="text" />
-        </label>
-
-        <label>Endereço (bairro ou cidade se for fora de Porto Alegre)
-          <input id="enderecoLocal" type="text" />
-        </label>
-
-        <label>CEP
-          <input id="cep" type="text" placeholder="00000-000" />
-        </label>
+  <div class="wrap">
+    <header>
+      <div>
+        <h1>Upload unitário</h1>
+        <div class="sub">PDF → extração → revisão → salvar no banco</div>
       </div>
+      <nav class="nav">
+        <a class="navlink" href="/financeiro">Financeiro</a>
+        <a class="navlink" href="/importar">Importar em massa</a>
+        <a class="navlink" href="/upload">Upload unitário</a>
+        <a class="navlink" href="/">Home</a>
+        <button id="btnLogout" class="secondary" type="button">Sair</button>
+      </nav>
+    </header>
 
-      <label>Data (emissão)
-        <input id="dataEmissao" type="text" placeholder="dd/mm/aaaa" />
-      </label>
+    <section class="panel card">
+      <div class="grid">
+        <!-- Esquerda: fluxo -->
+        <div>
+          <div class="panel card" style="padding:14px">
+            <div class="sectionTitle">
+              <div>
+                <h2>1) Vendedor (manual)</h2>
+                <div class="hint">Selecione o vendedor antes de salvar.</div>
+              </div>
+            </div>
 
-      <label>Valor total da nota
-        <input id="valorTotalNota" type="text" placeholder="Ex: 61,12" />
-      </label>
+            <div class="row">
+              <div class="col">
+                <label for="vendedor">Vendedor *</label>
+                <select id="vendedor" required>
+                  <option value="" selected disabled>Selecione...</option>
+                  <option>Matheus</option>
+                  <option>Bruna</option>
+                  <option>Vanessa</option>
+                  <option>Denise</option>
+                  <option>Priscila</option>
+                </select>
+              </div>
+            </div>
+          </div>
 
-      <details>
-        <summary>Debug (prévia do texto extraído)</summary>
-        <pre id="debug"></pre>
-      </details>
+          <div style="height:12px"></div>
 
-      <button id="btnSalvar" type="button">Salvar (exemplo)</button>
-      <pre id="saida"></pre>
+          <div class="panel card">
+            <div class="sectionTitle">
+              <div>
+                <h2>2) Enviar PDF</h2>
+                <div class="hint">Clique para selecionar. (Se for escaneado, vai precisar de OCR.)</div>
+              </div>
+              <div class="actions">
+                <button id="btnProcessar" type="button">Processar PDF</button>
+              </div>
+            </div>
+
+            <div class="drop">
+              <input id="file" type="file" accept="application/pdf" />
+              <div class="hint" style="margin-top:10px">
+                Selecionado: <span id="fileName" class="mono">—</span>
+              </div>
+            </div>
+          </div>
+
+          <div style="height:12px"></div>
+
+          <div class="panel card">
+            <div class="sectionTitle">
+              <div>
+                <h2>3) Campos (auto + revisão)</h2>
+                <div class="hint">Edite se precisar, depois clique em salvar.</div>
+              </div>
+              <div class="actions">
+                <button id="btnSalvar" type="button">Salvar</button>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="col">
+                <label for="nomeCliente">Nome do cliente</label>
+                <input id="nomeCliente" type="text" />
+              </div>
+
+              <div class="col small">
+                <label for="numeroNotaFiscal">Número da Nota fiscal</label>
+                <input id="numeroNotaFiscal" type="text" />
+              </div>
+
+              <div class="col small">
+                <label for="dataEmissao">Data (emissão)</label>
+                <input id="dataEmissao" type="text" placeholder="dd/mm/aaaa" />
+              </div>
+            </div>
+
+            <div style="height:10px"></div>
+
+            <div class="row">
+              <div class="col">
+                <label for="formaEnvio">Forma de envio</label>
+                <input id="formaEnvio" type="text" />
+              </div>
+
+              <div class="col small">
+                <label for="valorEnvio">Valor do envio</label>
+                <input id="valorEnvio" type="text" placeholder="Ex: 29,90" />
+              </div>
+
+              <div class="col">
+                <label for="pacote">Pacote</label>
+                <select id="pacote">
+                  <option value="" selected>Selecione...</option>
+                  <option value="Sacola">Sacola</option>
+                  <option value="Caixa P">Caixa P</option>
+                  <option value="Caixa M">Caixa M</option>
+                  <option value="Caixa G">Caixa G</option>
+                  <option value="Caixa GG">Caixa GG</option>
+                  <option value="Caixa XXG">Caixa XXG</option>
+                </select>
+              </div>
+            </div>
+
+            <div style="height:10px"></div>
+
+            <div class="row">
+              <div class="col">
+                <label for="formaPagamento">Forma de pagamento</label>
+                <input id="formaPagamento" type="text" />
+              </div>
+
+              <div class="col">
+                <label for="enderecoLocal">Endereço (bairro ou cidade se for fora de Porto Alegre)</label>
+                <input id="enderecoLocal" type="text" />
+              </div>
+
+              <div class="col small">
+                <label for="cep">CEP</label>
+                <input id="cep" type="text" placeholder="00000-000" />
+              </div>
+            </div>
+
+            <div style="height:10px"></div>
+
+            <div class="row">
+              <div class="col small">
+                <label for="valorTotalNota">Valor total da nota</label>
+                <input id="valorTotalNota" type="text" placeholder="Ex: 61,12" />
+              </div>
+            </div>
+
+            <details>
+              <summary>Debug (prévia do texto extraído)</summary>
+              <pre id="debug"></pre>
+            </details>
+
+            <pre id="saida"></pre>
+          </div>
+        </div>
+
+        <!-- Direita: status/ajuda -->
+        <aside>
+          <div class="panel card statusBox">
+            <div class="sectionTitle" style="margin-bottom:0">
+              <div>
+                <h2>Status</h2>
+                <div class="hint">Ajuda a identificar se faltou arquivo, extração ou login.</div>
+              </div>
+            </div>
+            <div class="kv">
+              <div class="k">Sessão</div>
+              <div class="v" id="authStatus">—</div>
+
+              <div class="k">Arquivo</div>
+              <div class="v" id="statusFile">—</div>
+
+              <div class="k">Processamento</div>
+              <div class="v" id="statusParse">—</div>
+
+              <div class="k">Salvar</div>
+              <div class="v" id="statusSave">—</div>
+            </div>
+          </div>
+
+          <div style="height:12px"></div>
+
+          <div class="panel card">
+            <div class="sectionTitle" style="margin-bottom:6px">
+              <h2>Notas</h2>
+            </div>
+            <div class="hint">
+              Se o PDF for escaneado, o texto pode vir vazio. Aí precisamos adicionar OCR (Tesseract/Google Vision).
+            </div>
+          </div>
+        </aside>
+      </div>
     </section>
-  </main>
+  </div>
 
+  <!-- Menu flutuante de download (mantido) -->
+  <div id="floatingDownload" class="floating-download">
+    <button id="btnDownloadToggle" class="fd-btn" type="button">Baixar relatório ▾</button>
+
+    <div id="downloadMenu" class="fd-menu" hidden>
+      <button class="fd-item" type="button" data-tipo="diario">Diário</button>
+      <button class="fd-item" type="button" data-tipo="mensal">Mensal</button>
+      <button class="fd-item" type="button" data-tipo="anual">Anual</button>
+    </div>
+  </div>
+
+  <!-- Seu JS atual continua funcionando -->
   <script src="./app.js"></script>
 
-  <!-- Menu flutuante de download -->
-<div id="floatingDownload" class="floating-download">
-  <button id="btnDownloadToggle" class="fd-btn">Baixar relatório ▾</button>
+  <script>
+    // Pequenos extras para ficar consistente com as outras páginas (logout + status)
+    async function checkAuth(){
+      try{
+        const res = await fetch("/api/me", { credentials: "include" });
+        const data = await res.json().catch(() => ({}));
+        const el = document.getElementById("authStatus");
+        if (!res.ok || !data.ok) { el.textContent = "Erro ao validar"; el.className = "v bad"; return; }
+        if (!data.authed) { el.textContent = "Não autenticado"; el.className = "v warn"; location.href = "/"; return; }
+        el.textContent = "OK";
+        el.className = "v ok";
+      }catch{
+        const el = document.getElementById("authStatus");
+        el.textContent = "Erro ao validar";
+        el.className = "v bad";
+      }
+    }
 
-  <div id="downloadMenu" class="fd-menu" hidden>
-    <button class="fd-item" data-tipo="diario">Diário</button>
-    <button class="fd-item" data-tipo="mensal">Mensal</button>
-    <button class="fd-item" data-tipo="anual">Anual</button>
-  </div>
-</div>
+    document.getElementById("btnLogout")?.addEventListener("click", async () => {
+      try { await fetch("/api/logout", { method:"POST", credentials:"include" }); } finally { location.href="/"; }
+    });
 
+    // status de arquivo (visual)
+    const fileEl = document.getElementById("file");
+    const fileName = document.getElementById("fileName");
+    const stFile = document.getElementById("statusFile");
+    if (fileEl && fileName && stFile){
+      fileEl.addEventListener("change", () => {
+        const f = fileEl.files && fileEl.files[0];
+        if (!f) { fileName.textContent = "—"; stFile.textContent = "Nenhum"; stFile.className="v"; return; }
+        fileName.textContent = f.name;
+        stFile.textContent = `${Math.round(f.size/1024)} KB`;
+        stFile.className = "v ok";
+      });
+    }
+
+    // Menu flutuante toggle (se seu app.js não faz isso)
+    const btnToggle = document.getElementById("btnDownloadToggle");
+    const menu = document.getElementById("downloadMenu");
+    if (btnToggle && menu){
+      btnToggle.addEventListener("click", () => {
+        menu.hidden = !menu.hidden;
+      });
+      document.addEventListener("click", (e) => {
+        if (!document.getElementById("floatingDownload")?.contains(e.target)) menu.hidden = true;
+      });
+    }
+
+    checkAuth();
+  </script>
 </body>
 </html>
+```
