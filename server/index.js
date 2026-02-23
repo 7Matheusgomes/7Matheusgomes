@@ -104,13 +104,14 @@ app.get("/api/financeiro/notas/stream", (req, res) => {
 // ===============================
 // PostgreSQL
 // ===============================
+import pg from "pg";
+const { Pool } = pg;
+
 const pool = new Pool({
-  host: process.env.PGHOST || "localhost",
-  port: Number(process.env.PGPORT || 5432),
-  user: process.env.PGUSER || "notas",
-  password: process.env.PGPASSWORD || "notas123",
-  database: process.env.PGDATABASE || "notasdb",
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
 });
+
 
 function parseBrDateToISO(br) {
   // "DD/MM/AAAA" -> "AAAA-MM-DD" | null
