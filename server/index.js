@@ -28,7 +28,6 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
-import cookieParser from "cookie-parser";
 import crypto from "crypto";
 import multer from "multer";
 import pdf from "pdf-parse";
@@ -77,21 +76,50 @@ function setSessionCookie(res, sid) {
   const sig = sign(sid);
   const packed = `${sid}.${sig}`;
 
-  res.cookie("sid", packed, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: IS_PROD, // no Render deve ser true
-    path: "/",
-    maxAge: 1000 * 60 * 60 * 24 * 7, // 7 dias
-  });
+  const parts = [
+    `sid=${encodeURIComponent(packed)}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+    `Max-Age=${60 * 60 * 24 * 7}`,
+  ];
+  if (IS_PROD) parts.push("Secure");
+
+  res.setHeader("Set-Cookie", parts.join("; "));
 }
 
 function clearSessionCookie(res) {
-  res.clearCookie("sid", { path: "/" });
+  const parts = [
+    "sid=",
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+    "Max-Age=0",
+  ];
+  if (IS_PROD) parts.push("Secure");
+
+  res.setHeader("Set-Cookie", parts.join("; "));
 }
 
+function parseCookies(req) {
+  const header = String(req.headers.cookie || "");
+  const out = {};
+  header.split(";").forEach((part) => {
+    const p = part.trim();
+    if (!p) return;
+    const idx = p.indexOf("=");
+    if (idx < 0) return;
+    const k = decodeURIComponent(p.slice(0, idx).trim());
+    const v = decodeURIComponent(p.slice(idx + 1).trim());
+    out[k] = v;
+  });
+  return out;
+}
+
+
 function readSid(req) {
-  const raw = String(req.cookies?.sid || "");
+  const cookies = parseCookies(req);
+  const raw = String(cookies.sid || "");
   const [sid, sig] = raw.split(".");
   if (!sid || !sig) return "";
   if (!SESSION_SECRET) return "";
@@ -136,7 +164,6 @@ app.use(
   })
 );
 app.use(express.json({ limit: "2mb" }));
-app.use(cookieParser());
 app.use(express.static(path.join(__dirname, "public")));
 
 // ===============================
@@ -760,6 +787,8 @@ app.post("/api/import-pdfs", requireAuth, uploadMany.array("files", 50), async (
     });
   }
 });
+
+
 
 // Salvar nota no DB (não protegido)
 app.post("/api/notas", async (req, res) => {
