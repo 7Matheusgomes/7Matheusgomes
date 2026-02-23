@@ -42,6 +42,9 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 
+app.set("etag", false);
+
+
 // ===============================
 // Config
 // ===============================
@@ -319,7 +322,12 @@ app.get("/upload", (req, res) => {
 // Auth API
 // ===============================
 app.get("/api/me", (req, res) => {
-  return res.json({ ok: true, authed: isAuthed(req) });
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+  res.setHeader("Surrogate-Control", "no-store");
+
+  return res.status(200).json({ ok: true, authed: isAuthed(req) });
 });
 
 app.post("/api/login", (req, res) => {

@@ -1,10 +1,14 @@
-// public/upload.js (pronto e robusto)
-// - Versão adaptada do seu app.js para uso exclusivo do upload.html
-// - Use no HTML: <script src="/upload.js"></script>
+// public/upload.js (corrigido p/ evitar problema de cache/304 no /api/me)
+// - Não faz redirect automático (quem está redirecionando é outro script da página).
+// - Mesmo assim, este arquivo agora:
+//   1) força "cache: no-store" em todas as chamadas fetch deste fluxo;
+//   2) trata respostas 304/204/HTML de forma segura (não tenta dar resp.json() cegamente);
+//   3) opcionalmente verifica sessão em /api/me sem quebrar se vier 304 (apenas avisa).
 
 const API_PARSE_URL = "/api/parse";
 const API_SALVAR_URL = "/api/notas";
 const API_RELATORIO_URL = "/api/relatorio.xlsx";
+const API_ME_URL = "/api/me";
 
 const $ = (id) => document.getElementById(id);
 
@@ -41,8 +45,6 @@ function fill(fields) {
   setValue("cep", f.cep || "");
   setValue("dataEmissao", f.dataEmissao || "");
   setValue("valorTotalNota", f.valorTotalNota || "");
-
-  // compatível com diferentes chaves de debug
   setText("debug", f.__debugDestChunk || f.__debugTextPreview || "");
 }
 
@@ -62,8 +64,66 @@ function getPayloadFromForm() {
   };
 }
 
+// --- helpers robustos p/ fetch/JSON (evita quebrar com 304 ou HTML) ---
+async function safeReadJson(resp) {
+  // 304/204 não traz body
+  if (resp.status === 304 || resp.status === 204) return null;
+
+  const ct = resp.headers.get("content-type") || "";
+  if (!ct.includes("application/json")) {
+    // Se vier HTML (ex: página inicial), não tenta parsear
+    const txt = await resp.text().catch(() => "");
+    return { ok: false, error: "Resposta não-JSON do servidor.", __raw: txt.slice(0, 500) };
+  }
+
+  return resp.json().catch(() => null);
+}
+
+function withNoStore(init = {}) {
+  return {
+    ...init,
+    credentials: "include",
+    cache: "no-store", // evita 304 em endpoints dinâmicos (quando o browser respeita)
+    headers: {
+      ...(init.headers || {}),
+      // Ajuda alguns proxies/CDNs a não reusar resposta
+      "Cache-Control": "no-cache",
+      Pragma: "no-cache",
+    },
+  };
+}
+
+// (Opcional) check de sessão apenas informativo — NÃO redireciona
+async function checkSessionSoft() {
+  try {
+    const resp = await fetch(API_ME_URL, withNoStore({ method: "GET" }));
+    const data = await safeReadJson(resp);
+
+    // Se deu 304, não conclui nada (evita falso "deslogado")
+    if (resp.status === 304) {
+      console.warn("[upload.js] /api/me retornou 304 (cache). Ideal corrigir no backend com Cache-Control: no-store.");
+      return;
+    }
+
+    if (!resp.ok) {
+      console.warn("[upload.js] /api/me falhou:", resp.status, data);
+      return;
+    }
+
+    if (data && data.ok && data.authed === false) {
+      console.warn("[upload.js] Sessão aparentemente não autenticada (data.authed=false).");
+      // NÃO redireciona aqui. O redirecionamento que você vê vem de outro script.
+    }
+  } catch (e) {
+    console.warn("[upload.js] Erro ao checar sessão:", e?.message || e);
+  }
+}
+
 // roda somente depois do HTML existir
 document.addEventListener("DOMContentLoaded", () => {
+  // Não resolve o redirect (isso é em outro script), mas ajuda a diagnosticar.
+  checkSessionSoft();
+
   // =========================
   // Upload / Processar PDF
   // =========================
@@ -90,16 +150,13 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     try {
-      const resp = await fetch(API_PARSE_URL, {
-        method: "POST",
-        body: fd,
-        credentials: "include", // importante se sua sessão for por cookie
-      });
+      const resp = await fetch(API_PARSE_URL, withNoStore({ method: "POST", body: fd }));
+      const data = await safeReadJson(resp);
 
-      const data = await resp.json().catch(() => ({}));
-
-      if (!resp.ok || !data.ok) {
-        alert(data.error || `Falha ao processar (HTTP ${resp.status}).`);
+      if (!resp.ok || !data || !data.ok) {
+        const msg = data?.error || `Falha ao processar (HTTP ${resp.status}).`;
+        console.warn("[upload.js] parse fail:", resp.status, data);
+        alert(msg);
         return;
       }
 
@@ -115,7 +172,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   // =========================
-  // Salvar (gera/atualiza relatórios no servidor)
+  // Salvar
   // =========================
   on("btnSalvar", "click", async () => {
     const payload = getPayloadFromForm();
@@ -133,18 +190,22 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     try {
-      const resp = await fetch(API_SALVAR_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include", // importante se sua sessão for por cookie
-        body: JSON.stringify(payload),
-      });
+      const resp = await fetch(
+        API_SALVAR_URL,
+        withNoStore({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        })
+      );
 
-      const data = await resp.json().catch(() => ({}));
+      const data = await safeReadJson(resp);
 
-      if (!resp.ok || !data.ok) {
+      if (!resp.ok || !data || !data.ok) {
         setText("saida", JSON.stringify(data, null, 2));
-        alert(data?.error || `Falha ao salvar (HTTP ${resp.status}).`);
+        const msg = data?.error || `Falha ao salvar (HTTP ${resp.status}).`;
+        console.warn("[upload.js] salvar fail:", resp.status, data);
+        alert(msg);
         return;
       }
 
@@ -179,14 +240,12 @@ document.addEventListener("DOMContentLoaded", () => {
     toggleMenu();
   });
 
-  // Fecha o menu ao clicar fora (sem quebrar se não existir)
   document.addEventListener("click", (e) => {
     const root = $("floatingDownload");
     if (!root) return;
     if (!root.contains(e.target)) toggleMenu(false);
   });
 
-  // Clique em Diário/Mensal/Anual -> download (se o menu existir)
   const menu = $("downloadMenu");
   if (menu) {
     menu.querySelectorAll(".fd-item").forEach((btn) => {
@@ -195,7 +254,7 @@ document.addEventListener("DOMContentLoaded", () => {
         e.stopPropagation();
 
         const tipo = btn.getAttribute("data-tipo") || "diario";
-        const data = $("dataEmissao")?.value || ""; // DD/MM/AAAA (se vazio, backend usa hoje)
+        const data = $("dataEmissao")?.value || "";
 
         toggleMenu(false);
 
@@ -203,14 +262,13 @@ document.addEventListener("DOMContentLoaded", () => {
         url.searchParams.set("tipo", tipo);
         if (data) url.searchParams.set("data", data);
 
-        // força download
         window.location.href = url.toString();
       });
     });
   }
 
   // =========================
-  // Extra: mostrar nome do arquivo (se existir #fileName)
+  // Extra: mostrar nome do arquivo
   // =========================
   const fileEl = $("file");
   const fileNameEl = $("fileName");
