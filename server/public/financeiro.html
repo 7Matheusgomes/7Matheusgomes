@@ -247,19 +247,6 @@
 <script>
   const fmtBRL = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 
-  function getAdminToken() {
-    return localStorage.getItem("ADMIN_TOKEN") || "";
-  }
-
-  function ensureAdminToken() {
-    let t = getAdminToken();
-    if (!t) {
-      t = prompt("Senha admin (token) para deletar:") || "";
-      if (t) localStorage.setItem("ADMIN_TOKEN", t);
-    }
-    return t;
-  }
-
   function todayISO() {
     const d = new Date();
     const yyyy = d.getFullYear();

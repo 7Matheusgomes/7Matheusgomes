@@ -1,26 +1,35 @@
 // server/index.js (backend completo - ESM)
-// Requisitos:
-//   npm i express cors multer pdf-parse exceljs pg dotenv
 //
-// Rodar:
-//   node index.js
+// Requisitos:
+//   npm i express cors multer pdf-parse exceljs pg dotenv cookie-parser
+//
+// Variáveis de ambiente:
+//   DATABASE_URL      -> string do Supabase Postgres
+//   ADMIN_PASSWORD    -> senha do login
+//   SESSION_SECRET    -> segredo p/ assinar sessão (32+ chars)
+//   NODE_ENV          -> "production" no Render
 //
 // Endpoints:
-//   POST /api/parse          (multipart/form-data com campo "file" PDF) -> extrai campos
-//   POST /api/notas          (JSON) -> salva nota no PostgreSQL
-//   DELETE /api/notas/:id    (delete) -> deleta nota (PROTEGIDO)
-//   POST /api/import-pdfs    (multipart/form-data "files") -> importação em massa (PROTEGIDO)
-//   GET  /api/notas          (querystring) -> lista notas com filtros (financeiro)
-//   GET  /api/relatorio.xlsx (querystring) -> gera excel do banco (diario|mensal|anual)
+//   POST /api/login          (JSON { password }) -> cria sessão
+//   POST /api/logout         -> encerra sessão
+//   GET  /api/me             -> status auth
+//   POST /api/parse          -> extrai campos do PDF
+//   POST /api/notas          -> salva nota no PostgreSQL
+//   DELETE /api/notas/:id    -> deleta nota (PROTEGIDO - sessão)
+//   POST /api/import-pdfs    -> importação em massa (PROTEGIDO - sessão)
+//   GET  /api/notas          -> lista notas (financeiro)
+//   GET  /api/relatorio.xlsx -> gera excel do banco
 //   GET  /api/financeiro/notas/stream (SSE)
 //   GET  /health
-//   GET  / (home)
-//   GET  /financeiro
-//   GET  /importar
+//   GET  / (home -> login se não autenticado)
+//   GET  /financeiro         (PROTEGIDO - sessão)
+//   GET  /importar           (PROTEGIDO - sessão)
 
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
+import cookieParser from "cookie-parser";
+import crypto from "crypto";
 import multer from "multer";
 import pdf from "pdf-parse";
 import ExcelJS from "exceljs";
@@ -34,29 +43,78 @@ const __dirname = path.dirname(__filename);
 const app = express();
 
 // ===============================
-// Middleware Admin (token)
+// Config
 // ===============================
-function requireAdmin(req, res, next) {
-  const token = String(req.headers["x-admin-token"] || "");
-  const expected = String(process.env.ADMIN_TOKEN || "");
+const IS_PROD = process.env.NODE_ENV === "production";
+const ADMIN_PASSWORD = String(process.env.ADMIN_PASSWORD || "");
+const SESSION_SECRET = String(process.env.SESSION_SECRET || "");
 
-  if (!expected) {
-    return res.status(500).json({
-      ok: false,
-      error: "ADMIN_TOKEN não configurado no servidor.",
-    });
-  }
-
-  if (!token || token !== expected) {
-    return res.status(401).json({ ok: false, error: "Não autorizado." });
-  }
-
-  return next();
+if (!ADMIN_PASSWORD) {
+  console.warn("[WARN] ADMIN_PASSWORD não configurado. Configure no ambiente (Render).");
+}
+if (!SESSION_SECRET) {
+  console.warn("[WARN] SESSION_SECRET não configurado. Configure no ambiente (Render).");
 }
 
-// ===============
+// ===============================
+// Sessão simples em memória (cookie httpOnly)
+// ===============================
+// Obs: em produção, ideal é Redis/DB. Para seu caso, isso resolve.
+// Reiniciar o serviço derruba sessões ativas.
+const sessions = new Map(); // sid -> { createdAt }
+
+function sign(value) {
+  // HMAC do valor para dificultar forja do cookie
+  if (!SESSION_SECRET) return "";
+  return crypto.createHmac("sha256", SESSION_SECRET).update(value).digest("hex");
+}
+
+function newSid() {
+  return crypto.randomBytes(24).toString("hex");
+}
+
+function setSessionCookie(res, sid) {
+  const sig = sign(sid);
+  const packed = `${sid}.${sig}`;
+
+  res.cookie("sid", packed, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: IS_PROD, // no Render deve ser true
+    path: "/",
+    maxAge: 1000 * 60 * 60 * 24 * 7, // 7 dias
+  });
+}
+
+function clearSessionCookie(res) {
+  res.clearCookie("sid", { path: "/" });
+}
+
+function readSid(req) {
+  const raw = String(req.cookies?.sid || "");
+  const [sid, sig] = raw.split(".");
+  if (!sid || !sig) return "";
+  if (!SESSION_SECRET) return "";
+  if (sign(sid) !== sig) return "";
+  return sid;
+}
+
+function isAuthed(req) {
+  const sid = readSid(req);
+  if (!sid) return false;
+  return sessions.has(sid);
+}
+
+function requireAuth(req, res, next) {
+  if (!isAuthed(req)) {
+    return res.status(401).json({ ok: false, error: "Não autenticado." });
+  }
+  next();
+}
+
+// ===============================
 // SSE: Financeiro
-// ===============
+// ===============================
 const financeSseClients = new Set();
 
 function sseBroadcast(payload) {
@@ -68,25 +126,207 @@ function sseBroadcast(payload) {
   }
 }
 
-app.use(cors());
+// ===============================
+// Middlewares base
+// ===============================
+app.use(
+  cors({
+    origin: true, // mantém compatível com seu uso atual
+    credentials: true,
+  })
+);
 app.use(express.json({ limit: "2mb" }));
+app.use(cookieParser());
 app.use(express.static(path.join(__dirname, "public")));
+
+// ===============================
+// Páginas (com login na inicial)
+// ===============================
+function loginPageHtml(message = "") {
+  const msg = message
+    ? `<div style="margin-top:10px;color:#ffcc66;font-size:13px;">${message}</div>`
+    : "";
+
+  return `<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Login - Sistema de Notas</title>
+  <style>
+    :root{
+      --bg:#0b1020;
+      --panel:#121a33;
+      --text:#e8ecff;
+      --muted:#aab3d6;
+      --shadow: 0 10px 25px rgba(0,0,0,.35);
+      --line:#243055;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, "Noto Sans";
+      background: radial-gradient(1200px 600px at 20% 0%, #172350 0%, transparent 50%),
+                  radial-gradient(900px 500px at 100% 20%, #1a2a66 0%, transparent 55%),
+                  var(--bg);
+      color:var(--text);
+      min-height:100vh;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      padding:16px;
+    }
+    .card{
+      width:min(440px, 100%);
+      background: linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));
+      border:1px solid rgba(255,255,255,.08);
+      border-radius:14px;
+      box-shadow: var(--shadow);
+      padding:16px;
+    }
+    h1{margin:0 0 6px 0;font-size:18px}
+    .sub{color:var(--muted);font-size:13px;margin-bottom:14px}
+    label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
+    input{
+      width:100%;
+      padding:10px 10px;
+      border-radius:10px;
+      border:1px solid rgba(255,255,255,.10);
+      outline:none;
+      background: rgba(10,16,36,.55);
+      color: var(--text);
+    }
+    button{
+      width:100%;
+      margin-top:12px;
+      padding:10px 12px;
+      border-radius:10px;
+      border:1px solid rgba(255,255,255,.14);
+      background: rgba(110,168,254,.14);
+      color:var(--text);
+      cursor:pointer;
+      font-weight:650;
+    }
+    .links{
+      margin-top:12px;
+      display:flex;
+      gap:10px;
+      justify-content:space-between;
+      color:var(--muted);
+      font-size:12px;
+    }
+    a{color:#6ea8fe;text-decoration:none}
+    a:hover{text-decoration:underline}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Entrar</h1>
+    <div class="sub">Digite a senha de administrador para acessar o sistema.</div>
+
+    <label for="pw">Senha</label>
+    <input id="pw" type="password" autocomplete="current-password" placeholder="Sua senha" />
+    <button id="btn" type="button">Entrar</button>
+    ${msg}
+
+    <div class="links">
+      <span>Após logar, você poderá acessar:</span>
+      <span><a href="/financeiro">Financeiro</a> • <a href="/importar">Importar</a></span>
+    </div>
+  </div>
+
+<script>
+  async function login() {
+    const password = document.getElementById("pw").value;
+    const btn = document.getElementById("btn");
+    btn.disabled = true;
+    try {
+      const res = await fetch("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ password })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        alert(data.error || "Falha no login.");
+        return;
+      }
+      // vai para o financeiro por padrão
+      location.href = "/financeiro";
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  document.getElementById("btn").addEventListener("click", login);
+  document.getElementById("pw").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") login();
+  });
+</script>
+</body>
+</html>`;
+}
 
 // Home
 app.get("/", (req, res) => {
+  if (!isAuthed(req)) return res.status(200).send(loginPageHtml());
   return res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
+// Páginas protegidas
 app.get("/financeiro", (req, res) => {
+  if (!isAuthed(req)) return res.status(200).send(loginPageHtml("Faça login para acessar o Financeiro."));
   return res.sendFile(path.join(__dirname, "public", "financeiro.html"));
 });
 
 app.get("/importar", (req, res) => {
+  if (!isAuthed(req)) return res.status(200).send(loginPageHtml("Faça login para acessar a Importação."));
   return res.sendFile(path.join(__dirname, "public", "importar.html"));
 });
 
-// SSE stream
+// ===============================
+// Auth API
+// ===============================
+app.get("/api/me", (req, res) => {
+  return res.json({ ok: true, authed: isAuthed(req) });
+});
+
+app.post("/api/login", (req, res) => {
+  const password = String(req.body?.password || "");
+
+  if (!ADMIN_PASSWORD) {
+    return res.status(500).json({ ok: false, error: "ADMIN_PASSWORD não configurado no servidor." });
+  }
+  if (!SESSION_SECRET) {
+    return res.status(500).json({ ok: false, error: "SESSION_SECRET não configurado no servidor." });
+  }
+
+  if (password !== ADMIN_PASSWORD) {
+    return res.status(401).json({ ok: false, error: "Senha inválida." });
+  }
+
+  const sid = newSid();
+  sessions.set(sid, { createdAt: Date.now() });
+  setSessionCookie(res, sid);
+
+  return res.json({ ok: true });
+});
+
+app.post("/api/logout", (req, res) => {
+  const sid = readSid(req);
+  if (sid) sessions.delete(sid);
+  clearSessionCookie(res);
+  return res.json({ ok: true });
+});
+
+// ===============================
+// SSE stream (pode proteger ou deixar aberto)
+// ===============================
 app.get("/api/financeiro/notas/stream", (req, res) => {
+  // Se quiser proteger SSE também, descomente:
+  // if (!isAuthed(req)) return res.status(401).end();
+
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache, no-transform",
@@ -104,15 +344,12 @@ app.get("/api/financeiro/notas/stream", (req, res) => {
 // ===============================
 // PostgreSQL
 // ===============================
-
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
+  ssl: { rejectUnauthorized: false },
 });
 
-
 function parseBrDateToISO(br) {
-  // "DD/MM/AAAA" -> "AAAA-MM-DD" | null
   if (!br) return null;
   const s = String(br).trim();
   const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
@@ -124,7 +361,6 @@ function parseBrDateToISO(br) {
 }
 
 function toNumberBR(v) {
-  // "1.234,56" -> 1234.56 | "1234.56" -> 1234.56
   if (v === null || v === undefined) return null;
   const s = String(v).trim();
   if (!s) return null;
@@ -384,10 +620,10 @@ app.post("/api/parse", upload.single("file"), async (req, res) => {
   }
 });
 
-// Importação em massa (PROTEGIDO)
-app.post("/api/import-pdfs", requireAdmin, uploadMany.array("files", 50), async (req, res) => {
+// Importação em massa (PROTEGIDO - sessão)
+app.post("/api/import-pdfs", requireAuth, uploadMany.array("files", 50), async (req, res) => {
   try {
-    const vendedorDefault = String(req.body?.vendedor || "").trim(); // opcional
+    const vendedorDefault = String(req.body?.vendedor || "").trim();
     const modo = String(req.body?.modo || "upsert").toLowerCase(); // upsert|skip
 
     const files = req.files || [];
@@ -598,8 +834,8 @@ app.post("/api/notas", async (req, res) => {
   }
 });
 
-// DELETE nota (PROTEGIDO)
-app.delete("/api/notas/:id", requireAdmin, async (req, res) => {
+// DELETE nota (PROTEGIDO - sessão)
+app.delete("/api/notas/:id", requireAuth, async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isFinite(id)) {
@@ -698,8 +934,8 @@ app.get("/api/notas", async (req, res) => {
 // Excel gerado a partir do banco
 app.get("/api/relatorio.xlsx", async (req, res) => {
   try {
-    const tipo = String(req.query.tipo || "").toLowerCase(); // diario|mensal|anual
-    const dataBr = String(req.query.data || "").trim(); // DD/MM/AAAA (opcional)
+    const tipo = String(req.query.tipo || "").toLowerCase();
+    const dataBr = String(req.query.data || "").trim();
     const vendedor = req.query.vendedor ? String(req.query.vendedor) : "";
     const formaEnvio = req.query.formaEnvio ? String(req.query.formaEnvio) : "";
 
@@ -988,4 +1224,3 @@ const PORT = Number(process.env.PORT || 3001);
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Server rodando na porta ${PORT}`);
 });
-
