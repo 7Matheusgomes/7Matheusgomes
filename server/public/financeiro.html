@@ -139,6 +139,7 @@
     .toast.show{display:block}
   </style>
 </head>
+
 <body>
   <div class="wrap">
     <header>
@@ -247,6 +248,13 @@
 <script>
   const fmtBRL = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 
+  function toast(msg) {
+    const el = document.getElementById("toast");
+    el.textContent = msg;
+    el.classList.add("show");
+    setTimeout(() => el.classList.remove("show"), 2200);
+  }
+
   function todayISO() {
     const d = new Date();
     const yyyy = d.getFullYear();
@@ -269,11 +277,23 @@
     return fmtBRL.format(num);
   }
 
-  function toast(msg) {
-    const el = document.getElementById("toast");
-    el.textContent = msg;
-    el.classList.add("show");
-    setTimeout(() => el.classList.remove("show"), 2200);
+  function redirectToLogin() {
+    // Mantém retorno pra esta página
+    location.href = "/?next=/financeiro";
+  }
+
+  async function requireAuthOrRedirect() {
+    const res = await fetch("/api/me", {
+      credentials: "include",
+      cache: "no-store",
+      headers: { "Cache-Control": "no-cache", Pragma: "no-cache" }
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data?.ok || !data?.authed) {
+      redirectToLogin();
+      return false;
+    }
+    return true;
   }
 
   const state = {
@@ -368,7 +388,35 @@
     document.getElementById("next").disabled = state.page >= totalPages;
   }
 
-  // DELETE com token
+  async function fetchNotas() {
+    const f = getFilters();
+    const qs = buildQuery({
+      dataDe: f.dataDe,
+      dataAte: f.dataAte,
+      vendedor: f.vendedor,
+      formaEnvio: f.formaEnvio,
+      q: f.q,
+      page: state.page,
+      pageSize: state.pageSize
+    });
+
+    const res = await fetch(`/api/notas?${qs}`, { credentials: "include" });
+
+    if (res.status === 401) {
+      redirectToLogin();
+      return;
+    }
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) throw new Error(data.error || "Falha ao listar notas");
+
+    state.total = data.total || 0;
+    state.items = data.items || [];
+    state.lastFetchAt = new Date().toISOString();
+    render();
+  }
+
+  // DELETE com cookie (sem token)
   document.getElementById("tbody").addEventListener("click", async (ev) => {
     const btn = ev.target?.closest?.("button[data-del]");
     if (!btn) return;
@@ -380,22 +428,18 @@
 
     btn.disabled = true;
     try {
-      const token = ensureAdminToken();
-      if (!token) return;
-
       const resp = await fetch(`/api/notas/${id}`, {
         method: "DELETE",
-        headers: { "x-admin-token": token }
+        credentials: "include",
       });
 
-      const data = await resp.json().catch(() => ({}));
-
       if (resp.status === 401) {
-        localStorage.removeItem("ADMIN_TOKEN");
-        toast("Senha inválida. Tente novamente.");
+        toast("Sessão expirada. Faça login novamente.");
+        setTimeout(redirectToLogin, 600);
         return;
       }
 
+      const data = await resp.json().catch(() => ({}));
       if (!resp.ok || !data.ok) {
         toast(data.error || "Falha ao deletar.");
         return;
@@ -412,28 +456,6 @@
       btn.disabled = false;
     }
   });
-
-  async function fetchNotas() {
-    const f = getFilters();
-    const qs = buildQuery({
-      dataDe: f.dataDe,
-      dataAte: f.dataAte,
-      vendedor: f.vendedor,
-      formaEnvio: f.formaEnvio,
-      q: f.q,
-      page: state.page,
-      pageSize: state.pageSize
-    });
-
-    const res = await fetch(`/api/notas?${qs}`);
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.error || "Falha ao listar notas");
-
-    state.total = data.total || 0;
-    state.items = data.items || [];
-    state.lastFetchAt = new Date().toISOString();
-    render();
-  }
 
   function setHoje() {
     const t = todayISO();
@@ -475,9 +497,19 @@
         text.textContent = "Ao vivo";
       };
 
-      ev.onerror = () => {
+      ev.onerror = async () => {
         dot.className = "dot warn";
         text.textContent = "Reconectando…";
+
+        // Se o backend estiver exigindo auth no SSE, aqui ajuda a detectar “sessão caiu”
+        try {
+          const res = await fetch("/api/me", { credentials: "include", cache: "no-store" });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || !data?.authed) {
+            dot.className = "dot warn";
+            text.textContent = "Sessão expirada";
+          }
+        } catch {}
       };
 
       ev.onmessage = (msg) => {
@@ -544,9 +576,15 @@
     await fetchNotas().catch(err => toast(err.message));
   });
 
-  setHoje();
-  fetchNotas().catch(err => toast(err.message));
-  connectSse();
+  (async function boot() {
+    // garante que está logado antes de fazer qualquer coisa
+    const ok = await requireAuthOrRedirect();
+    if (!ok) return;
+
+    setHoje();
+    fetchNotas().catch(err => toast(err.message));
+    connectSse();
+  })();
 </script>
 </body>
 </html>

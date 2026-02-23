@@ -62,6 +62,7 @@
 <script>
   const tbody = document.getElementById("tbody");
   const statusEl = document.getElementById("status");
+  const btnEnviar = document.getElementById("btnEnviar");
 
   function addRow(name, ok, detail){
     const tr = document.createElement("tr");
@@ -73,9 +74,25 @@
     tbody.appendChild(tr);
   }
 
-  document.getElementById("btnEnviar").addEventListener("click", async () => {
+  async function requireLoginOrRedirect() {
+    const res = await fetch("/api/me", { credentials: "include" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data?.authed) {
+      // volta pro login; mantém o usuário retornando pra página depois
+      location.href = "/?next=/importar";
+      return false;
+    }
+    return true;
+  }
+
+  // Checa login ao carregar
+  requireLoginOrRedirect();
+
+  btnEnviar.addEventListener("click", async () => {
     tbody.innerHTML = "";
     statusEl.textContent = "";
+
+    if (!(await requireLoginOrRedirect())) return;
 
     const files = document.getElementById("files").files;
     const vendedor = document.getElementById("vendedor").value.trim();
@@ -92,26 +109,45 @@
     fd.append("modo", modo);
 
     statusEl.textContent = "Enviando e processando…";
+    btnEnviar.disabled = true;
 
-    const resp = await fetch("/api/import-pdfs", { method: "POST", body: fd });
-    const data = await resp.json().catch(()=>null);
+    try {
+      const resp = await fetch("/api/import-pdfs", {
+        method: "POST",
+        body: fd,
+        credentials: "include",
+      });
 
-    if (!resp.ok || !data?.ok) {
-      statusEl.textContent = (data && (data.error || data.details)) ? (data.error || data.details) : "Falha no import.";
-      return;
-    }
-
-    statusEl.textContent = `Concluído: ${data.saved} salvas, ${data.skipped} puladas, ${data.failed} falharam (total ${data.total}).`;
-
-    for (const r of data.results) {
-      if (r.ok && r.skipped) {
-        addRow(r.fileName, true, `Pulado: ${r.reason}`);
-      } else if (r.ok) {
-        const nf = r.nota?.numero_nota_fiscal || "—";
-        addRow(r.fileName, true, `NF: ${nf}`);
-      } else {
-        addRow(r.fileName, false, r.error);
+      if (resp.status === 401) {
+        statusEl.textContent = "Sessão expirada. Faça login novamente.";
+        setTimeout(() => (location.href = "/?next=/importar"), 600);
+        return;
       }
+
+      const data = await resp.json().catch(() => null);
+
+      if (!resp.ok || !data?.ok) {
+        statusEl.textContent =
+          (data && (data.error || data.details))
+            ? (data.error || data.details)
+            : `Falha no import. HTTP ${resp.status}`;
+        return;
+      }
+
+      statusEl.textContent = `Concluído: ${data.saved} salvas, ${data.skipped} puladas, ${data.failed} falharam (total ${data.total}).`;
+
+      for (const r of data.results) {
+        if (r.ok && r.skipped) {
+          addRow(r.fileName, true, `Pulado: ${r.reason}`);
+        } else if (r.ok) {
+          const nf = r.nota?.numero_nota_fiscal || "—";
+          addRow(r.fileName, true, `NF: ${nf}`);
+        } else {
+          addRow(r.fileName, false, r.error);
+        }
+      }
+    } finally {
+      btnEnviar.disabled = false;
     }
   });
 </script>
