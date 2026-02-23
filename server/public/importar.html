@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Importar PDFs em massa</title>
+  <style>
+    body{font-family:system-ui,Segoe UI,Arial;margin:24px;background:#0b1020;color:#e8ecff}
+    .panel{max-width:900px;margin:auto;background:#121a33;border:1px solid rgba(255,255,255,.12);border-radius:14px;padding:16px}
+    input,select,button{padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,.15);background:rgba(10,16,36,.55);color:#e8ecff}
+    button{cursor:pointer;background:rgba(110,168,254,.18);font-weight:650}
+    .row{display:flex;gap:12px;flex-wrap:wrap;margin-top:10px}
+    .col{flex:1;min-width:220px}
+    table{width:100%;border-collapse:collapse;margin-top:14px}
+    th,td{padding:8px;border-bottom:1px solid rgba(255,255,255,.10);font-size:13px;vertical-align:top}
+    th{color:#aab3d6;text-align:left}
+    .ok{color:#3ddc97}
+    .bad{color:#ff6b6b}
+    .muted{color:#aab3d6}
+  </style>
+</head>
+<body>
+  <div class="panel">
+    <h2 style="margin:0 0 6px">Importar notas em massa (PDF)</h2>
+    <div class="muted">Selecione vários PDFs, informe o vendedor (opcional, mas recomendado) e envie.</div>
+
+    <div class="row">
+      <div class="col">
+        <label class="muted">PDFs</label><br/>
+        <input id="files" type="file" accept="application/pdf" multiple />
+      </div>
+      <div class="col">
+        <label class="muted">Vendedor (default)</label><br/>
+        <input id="vendedor" type="text" placeholder="Ex.: Matheus" />
+      </div>
+      <div class="col">
+        <label class="muted">Modo</label><br/>
+        <select id="modo">
+          <option value="upsert">Atualizar se NF já existir (upsert)</option>
+          <option value="skip">Pular se NF já existir (skip)</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="row" style="align-items:center">
+      <button id="btnEnviar" type="button">Enviar</button>
+      <span id="status" class="muted"></span>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Arquivo</th>
+          <th>Status</th>
+          <th>Detalhe</th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+
+<script>
+  const tbody = document.getElementById("tbody");
+  const statusEl = document.getElementById("status");
+
+  function addRow(name, ok, detail){
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${name}</td>
+      <td class="${ok ? "ok" : "bad"}">${ok ? "OK" : "ERRO"}</td>
+      <td class="muted">${detail || ""}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+
+  document.getElementById("btnEnviar").addEventListener("click", async () => {
+    tbody.innerHTML = "";
+    statusEl.textContent = "";
+
+    const files = document.getElementById("files").files;
+    const vendedor = document.getElementById("vendedor").value.trim();
+    const modo = document.getElementById("modo").value;
+
+    if (!files || !files.length) {
+      statusEl.textContent = "Selecione pelo menos 1 PDF.";
+      return;
+    }
+
+    const fd = new FormData();
+    for (const f of files) fd.append("files", f);
+    fd.append("vendedor", vendedor);
+    fd.append("modo", modo);
+
+    statusEl.textContent = "Enviando e processando…";
+
+    const resp = await fetch("/api/import-pdfs", { method: "POST", body: fd });
+    const data = await resp.json().catch(()=>null);
+
+    if (!resp.ok || !data?.ok) {
+      statusEl.textContent = (data && (data.error || data.details)) ? (data.error || data.details) : "Falha no import.";
+      return;
+    }
+
+    statusEl.textContent = `Concluído: ${data.saved} salvas, ${data.skipped} puladas, ${data.failed} falharam (total ${data.total}).`;
+
+    for (const r of data.results) {
+      if (r.ok && r.skipped) {
+        addRow(r.fileName, true, `Pulado: ${r.reason}`);
+      } else if (r.ok) {
+        const nf = r.nota?.numero_nota_fiscal || "—";
+        addRow(r.fileName, true, `NF: ${nf}`);
+      } else {
+        addRow(r.fileName, false, r.error);
+      }
+    }
+  });
+</script>
+</body>
+</html>

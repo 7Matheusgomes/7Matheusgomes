@@ -1,0 +1,60 @@
+body { font-family: system-ui, Arial, sans-serif; background:#f6f7f9; margin:0; }
+.container { max-width: 980px; margin: 24px auto; padding: 0 16px; }
+.card { background:#fff; border:1px solid #e6e6e6; border-radius:12px; padding:16px; margin:12px 0; }
+.grid { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+label { display:flex; flex-direction:column; gap:6px; font-size:14px; }
+input, select, button { padding:10px; border-radius:10px; border:1px solid #d0d5dd; }
+button { cursor:pointer; border:0; background:#111827; color:#fff; }
+button:disabled { opacity:.6; cursor:not-allowed; }
+.hint { color:#6b7280; font-size: 13px; }
+pre { background:#0b1020; color:#e5e7eb; padding:12px; border-radius:10px; overflow:auto; }
+@media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
+    
+.floating-download {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 9999;
+  font-family: system-ui, Arial, sans-serif;
+}
+
+/* Botão principal */
+.fd-btn {
+  background: #000;          /* preto */
+  color: #fff;               /* branco */
+  border: 1px solid #333;
+  padding: 10px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  box-shadow: 0 10px 26px rgba(0,0,0,.35);
+}
+
+.fd-btn:hover {
+  background: #0b0b0b;
+}
+
+/* Menu */
+.fd-menu {
+  margin-top: 8px;
+  background: #000;          /* preto */
+  border: 1px solid #333;
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 10px 26px rgba(0,0,0,.35);
+}
+
+/* Itens */
+.fd-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  background: #000;          /* preto */
+  color: #fff;               /* branco */
+  border: 0;
+  cursor: pointer;
+}
+
+.fd-item:hover {
+  background: #111;          /* preto “mais claro” */
+}

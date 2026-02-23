@@ -1,0 +1,565 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Financeiro - Notas</title>
+  <style>
+    :root{
+      --bg:#0b1020;
+      --panel:#121a33;
+      --panel2:#0f1730;
+      --text:#e8ecff;
+      --muted:#aab3d6;
+      --line:#243055;
+      --accent:#6ea8fe;
+      --ok:#3ddc97;
+      --warn:#ffcc66;
+      --bad:#ff6b6b;
+      --chip:#1a2550;
+      --shadow: 0 10px 25px rgba(0,0,0,.35);
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, "Noto Sans";
+      background: radial-gradient(1200px 600px at 20% 0%, #172350 0%, transparent 50%),
+                  radial-gradient(900px 500px at 100% 20%, #1a2a66 0%, transparent 55%),
+                  var(--bg);
+      color:var(--text);
+    }
+    .wrap{max-width:1200px;margin:22px auto;padding:0 16px}
+    header{
+      display:flex; gap:12px; align-items:flex-end; justify-content:space-between; flex-wrap:wrap;
+      margin-bottom:14px;
+    }
+    h1{margin:0;font-size:22px;letter-spacing:.2px}
+    .sub{color:var(--muted);font-size:13px;margin-top:6px}
+    .row{display:flex;gap:12px;flex-wrap:wrap}
+    .panel{
+      background: linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));
+      border:1px solid rgba(255,255,255,.08);
+      border-radius:14px;
+      box-shadow: var(--shadow);
+    }
+    .summary{
+      display:grid;
+      grid-template-columns: repeat(4, minmax(180px, 1fr));
+      gap:12px;
+      padding:12px;
+      margin-bottom:12px;
+    }
+    @media (max-width: 900px){
+      .summary{grid-template-columns: repeat(2, minmax(160px, 1fr));}
+    }
+    .card{padding:12px;border-radius:12px;background: rgba(0,0,0,.12); border:1px solid rgba(255,255,255,.06)}
+    .card .k{color:var(--muted);font-size:12px}
+    .card .v{font-size:18px;font-weight:700;margin-top:6px}
+    .filters{padding:12px;margin-bottom:12px}
+    label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
+    input, select{
+      width:100%;
+      padding:10px 10px;
+      border-radius:10px;
+      border:1px solid rgba(255,255,255,.10);
+      outline:none;
+      background: rgba(10,16,36,.55);
+      color: var(--text);
+    }
+    input::placeholder{color:#7f89b3}
+    .col{min-width:180px;flex:1}
+    .col.small{min-width:150px;flex:0.8}
+    .col.big{min-width:260px;flex:2}
+    .actions{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap}
+    button{
+      padding:10px 12px;
+      border-radius:10px;
+      border:1px solid rgba(255,255,255,.14);
+      background: rgba(110,168,254,.14);
+      color:var(--text);
+      cursor:pointer;
+      font-weight:650;
+    }
+    button.secondary{background: rgba(255,255,255,.06)}
+    button:disabled{opacity:.6;cursor:not-allowed}
+    .tableWrap{padding:0; overflow:hidden}
+    table{width:100%;border-collapse:collapse}
+    thead th{
+      text-align:left;
+      font-size:12px;
+      color:var(--muted);
+      padding:12px;
+      background: rgba(0,0,0,.18);
+      border-bottom:1px solid rgba(255,255,255,.10);
+      position:sticky; top:0;
+      z-index:1;
+    }
+    tbody td{
+      padding:12px;
+      border-bottom:1px solid rgba(255,255,255,.08);
+      vertical-align:top;
+      font-size:13px;
+    }
+    tbody tr:hover{background: rgba(255,255,255,.03)}
+    .chip{
+      display:inline-flex; align-items:center; gap:6px;
+      background: rgba(26,37,80,.65);
+      border:1px solid rgba(255,255,255,.08);
+      padding:4px 8px;
+      border-radius:999px;
+      font-size:12px;
+      color: var(--text);
+      white-space:nowrap;
+    }
+    .dot{width:8px;height:8px;border-radius:99px;background:var(--muted)}
+    .dot.ok{background:var(--ok)}
+    .dot.warn{background:var(--warn)}
+    .dot.bad{background:var(--bad)}
+    .muted{color:var(--muted)}
+    .right{text-align:right}
+    .mono{font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace}
+    .footerBar{
+      display:flex; justify-content:space-between; align-items:center; gap:10px;
+      padding:10px 12px;
+      border-top:1px solid rgba(255,255,255,.08);
+      background: rgba(0,0,0,.10);
+      color: var(--muted);
+      font-size:12px;
+    }
+    .toast{
+      position:fixed; right:16px; bottom:16px;
+      background: rgba(18,26,51,.92);
+      border:1px solid rgba(255,255,255,.10);
+      padding:10px 12px;
+      border-radius:12px;
+      box-shadow: var(--shadow);
+      max-width: 360px;
+      display:none;
+    }
+    .toast.show{display:block}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <h1>Financeiro</h1>
+        <div class="sub">
+          Notas salvas • filtros por data / vendedor / forma de envio • atualização quase instantânea
+        </div>
+      </div>
+      <div class="sub">
+        <span class="chip"><span id="liveDot" class="dot"></span> <span id="liveText">Conectando…</span></span>
+      </div>
+    </header>
+
+    <section class="panel summary" aria-label="Resumo do dia">
+      <div class="card">
+        <div class="k">Notas (filtro atual)</div>
+        <div id="sumQtd" class="v">—</div>
+      </div>
+      <div class="card">
+        <div class="k">Total (filtro atual)</div>
+        <div id="sumTotal" class="v">—</div>
+      </div>
+      <div class="card">
+        <div class="k">Envio (filtro atual)</div>
+        <div id="sumEnvio" class="v">—</div>
+      </div>
+      <div class="card">
+        <div class="k">Última atualização</div>
+        <div id="sumUpdated" class="v">—</div>
+      </div>
+    </section>
+
+    <section class="panel filters" aria-label="Filtros">
+      <div class="row">
+        <div class="col small">
+          <label for="ini">Data (de)</label>
+          <input id="ini" type="date" />
+        </div>
+        <div class="col small">
+          <label for="fim">Data (até)</label>
+          <input id="fim" type="date" />
+        </div>
+        <div class="col">
+          <label for="vendedor">Vendedor</label>
+          <input id="vendedor" type="text" placeholder="Ex.: Maria" />
+        </div>
+        <div class="col">
+          <label for="formaEnvio">Forma de envio</label>
+          <select id="formaEnvio">
+            <option value="">Todas</option>
+            <option>TELE-ENTREGA</option>
+            <option>PAC</option>
+            <option>SEDEX</option>
+            <option>RETIRADA</option>
+            <option>LOGGI</option>
+            <option>JADLOG</option>
+            <option>TOTAL EXPRESS</option>
+            <option>NENHUM</option>
+          </select>
+        </div>
+        <div class="col big">
+          <label for="q">Busca</label>
+          <input id="q" type="text" placeholder="Cliente, NF, CEP, endereço…" />
+        </div>
+        <div class="actions">
+          <button id="btnHoje" class="secondary" type="button">Hoje</button>
+          <button id="btnBuscar" type="button">Buscar</button>
+          <button id="btnXlsx" class="secondary" type="button">Baixar XLSX</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel tableWrap" aria-label="Notas">
+      <div style="max-height: 62vh; overflow:auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Emissão</th>
+              <th>NF</th>
+              <th>Vendedor</th>
+              <th>Cliente</th>
+              <th>Envio</th>
+              <th class="right">Total</th>
+              <th>Criado</th>
+              <th>Ações</th>
+            </tr>
+          </thead>
+          <tbody id="tbody">
+            <tr><td colspan="8" class="muted">Carregando…</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="footerBar">
+        <div id="pagingInfo">—</div>
+        <div>
+          <button id="prev" class="secondary" type="button">Anterior</button>
+          <button id="next" class="secondary" type="button">Próxima</button>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+<script>
+  const fmtBRL = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
+
+  function getAdminToken() {
+    return localStorage.getItem("ADMIN_TOKEN") || "";
+  }
+
+  function ensureAdminToken() {
+    let t = getAdminToken();
+    if (!t) {
+      t = prompt("Senha admin (token) para deletar:") || "";
+      if (t) localStorage.setItem("ADMIN_TOKEN", t);
+    }
+    return t;
+  }
+
+  function todayISO() {
+    const d = new Date();
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth()+1).padStart(2,"0");
+    const dd = String(d.getDate()).padStart(2,"0");
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  function formatDateTime(isoLike) {
+    if (!isoLike) return "—";
+    const d = new Date(isoLike);
+    if (Number.isNaN(d.getTime())) return String(isoLike);
+    return d.toLocaleString("pt-BR");
+  }
+
+  function brMoneyFromDbNumber(n) {
+    if (n === null || n === undefined || n === "") return "";
+    const num = Number(n);
+    if (!Number.isFinite(num)) return "";
+    return fmtBRL.format(num);
+  }
+
+  function toast(msg) {
+    const el = document.getElementById("toast");
+    el.textContent = msg;
+    el.classList.add("show");
+    setTimeout(() => el.classList.remove("show"), 2200);
+  }
+
+  const state = {
+    page: 1,
+    pageSize: 50,
+    total: 0,
+    items: [],
+    lastFetchAt: null,
+  };
+
+  function getFilters() {
+    const dataDe = document.getElementById("ini").value;
+    const dataAte = document.getElementById("fim").value;
+    const vendedor = document.getElementById("vendedor").value.trim();
+    const formaEnvio = document.getElementById("formaEnvio").value.trim();
+    const q = document.getElementById("q").value.trim();
+    return { dataDe, dataAte, vendedor, formaEnvio, q };
+  }
+
+  function buildQuery(params) {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined && v !== null && String(v).length) qs.set(k, v);
+    }
+    return qs.toString();
+  }
+
+  function matchesCurrentFilter(nota) {
+    const f = getFilters();
+
+    const em = (nota.data_emissao || "").slice(0,10);
+    if (f.dataDe && em && em < f.dataDe) return false;
+    if (f.dataAte && em && em > f.dataAte) return false;
+
+    if (f.vendedor && !(String(nota.vendedor || "").toLowerCase().includes(f.vendedor.toLowerCase()))) return false;
+    if (f.formaEnvio && !(String(nota.forma_envio || "").toLowerCase().includes(f.formaEnvio.toLowerCase()))) return false;
+
+    if (f.q) {
+      const hay = [
+        nota.nome_cliente,
+        nota.numero_nota_fiscal,
+        nota.cep,
+        nota.endereco_local
+      ].join(" ").toLowerCase();
+      if (!hay.includes(f.q.toLowerCase())) return false;
+    }
+
+    return true;
+  }
+
+  function render() {
+    const tbody = document.getElementById("tbody");
+    tbody.innerHTML = "";
+
+    if (!state.items.length) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td colspan="8" class="muted">Nenhuma nota encontrada.</td>`;
+      tbody.appendChild(tr);
+    } else {
+      for (const r of state.items) {
+        const tr = document.createElement("tr");
+        const envio = brMoneyFromDbNumber(r.valor_envio);
+        const envioChip = envio ? `<span class="chip">${envio}</span>` : `<span class="muted">—</span>`;
+        tr.innerHTML = `
+          <td class="mono">${r.data_emissao ? String(r.data_emissao).slice(0,10) : "—"}</td>
+          <td class="mono">${r.numero_nota_fiscal || "—"}</td>
+          <td>${r.vendedor || "—"}</td>
+          <td>${r.nome_cliente || "—"}</td>
+          <td>${envioChip}</td>
+          <td class="right"><strong>${brMoneyFromDbNumber(r.valor_total_nota) || "—"}</strong></td>
+          <td class="mono">${formatDateTime(r.created_at)}</td>
+          <td><button class="secondary" data-del="${r.id}" type="button">Deletar</button></td>
+        `;
+        tbody.appendChild(tr);
+      }
+    }
+
+    const qtd = state.total ?? state.items.length;
+    const totalNota = state.items.reduce((acc, r) => acc + (Number(r.valor_total_nota)||0), 0);
+    const totalEnvio = state.items.reduce((acc, r) => acc + (Number(r.valor_envio)||0), 0);
+
+    document.getElementById("sumQtd").textContent = String(qtd);
+    document.getElementById("sumTotal").textContent = fmtBRL.format(totalNota);
+    document.getElementById("sumEnvio").textContent = fmtBRL.format(totalEnvio);
+    document.getElementById("sumUpdated").textContent = state.lastFetchAt ? formatDateTime(state.lastFetchAt) : "—";
+
+    const totalPages = Math.max(1, Math.ceil((state.total || 0) / state.pageSize));
+    document.getElementById("pagingInfo").textContent =
+      `Página ${state.page} de ${totalPages} • ${state.total} registros`;
+
+    document.getElementById("prev").disabled = state.page <= 1;
+    document.getElementById("next").disabled = state.page >= totalPages;
+  }
+
+  // DELETE com token
+  document.getElementById("tbody").addEventListener("click", async (ev) => {
+    const btn = ev.target?.closest?.("button[data-del]");
+    if (!btn) return;
+
+    const id = btn.getAttribute("data-del");
+    if (!id) return;
+
+    if (!confirm(`Deletar a nota ID ${id}?`)) return;
+
+    btn.disabled = true;
+    try {
+      const token = ensureAdminToken();
+      if (!token) return;
+
+      const resp = await fetch(`/api/notas/${id}`, {
+        method: "DELETE",
+        headers: { "x-admin-token": token }
+      });
+
+      const data = await resp.json().catch(() => ({}));
+
+      if (resp.status === 401) {
+        localStorage.removeItem("ADMIN_TOKEN");
+        toast("Senha inválida. Tente novamente.");
+        return;
+      }
+
+      if (!resp.ok || !data.ok) {
+        toast(data.error || "Falha ao deletar.");
+        return;
+      }
+
+      state.items = state.items.filter(x => String(x.id) !== String(id));
+      state.total = Math.max(0, (state.total || 0) - 1);
+      state.lastFetchAt = new Date().toISOString();
+      render();
+      toast("Nota deletada.");
+    } catch (e) {
+      toast("Falha ao deletar (rede).");
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  async function fetchNotas() {
+    const f = getFilters();
+    const qs = buildQuery({
+      dataDe: f.dataDe,
+      dataAte: f.dataAte,
+      vendedor: f.vendedor,
+      formaEnvio: f.formaEnvio,
+      q: f.q,
+      page: state.page,
+      pageSize: state.pageSize
+    });
+
+    const res = await fetch(`/api/notas?${qs}`);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "Falha ao listar notas");
+
+    state.total = data.total || 0;
+    state.items = data.items || [];
+    state.lastFetchAt = new Date().toISOString();
+    render();
+  }
+
+  function setHoje() {
+    const t = todayISO();
+    document.getElementById("ini").value = t;
+    document.getElementById("fim").value = t;
+    state.page = 1;
+  }
+
+  function buildRelatorioUrl() {
+    const f = getFilters();
+    const ini = f.dataDe || todayISO();
+    const fim = f.dataAte || ini;
+
+    const [Y, M, D] = ini.split("-").map(Number);
+    const pad = (n)=>String(n).padStart(2,"0");
+    const dataBr = `${pad(D)}/${pad(M)}/${Y}`;
+
+    const tipo = (ini === fim) ? "diario" : "mensal";
+
+    const qs = buildQuery({
+      tipo,
+      data: dataBr,
+      vendedor: f.vendedor,
+      formaEnvio: f.formaEnvio
+    });
+
+    return `/api/relatorio.xlsx?${qs}`;
+  }
+
+  function connectSse() {
+    const dot = document.getElementById("liveDot");
+    const text = document.getElementById("liveText");
+
+    try {
+      const ev = new EventSource("/api/financeiro/notas/stream");
+
+      ev.onopen = () => {
+        dot.className = "dot ok";
+        text.textContent = "Ao vivo";
+      };
+
+      ev.onerror = () => {
+        dot.className = "dot warn";
+        text.textContent = "Reconectando…";
+      };
+
+      ev.onmessage = (msg) => {
+        try {
+          const payload = JSON.parse(msg.data);
+
+          if (payload.type === "NOTA_CRIADA" && payload.nota) {
+            const nota = payload.nota;
+
+            if (matchesCurrentFilter(nota) && state.page === 1) {
+              state.items = [nota, ...state.items].slice(0, state.pageSize);
+              state.total = (state.total || 0) + 1;
+              state.lastFetchAt = new Date().toISOString();
+              render();
+              toast("Nova nota recebida.");
+            } else {
+              state.lastFetchAt = new Date().toISOString();
+              document.getElementById("sumUpdated").textContent = formatDateTime(state.lastFetchAt);
+            }
+          }
+
+          if (payload.type === "NOTA_DELETADA" && payload.id) {
+            const id = payload.id;
+            const before = state.items.length;
+            state.items = state.items.filter(x => String(x.id) !== String(id));
+
+            if (state.items.length !== before) {
+              state.total = Math.max(0, (state.total || 0) - 1);
+              state.lastFetchAt = new Date().toISOString();
+              render();
+              toast("Uma nota foi deletada.");
+            }
+          }
+        } catch {}
+      };
+    } catch (e) {
+      dot.className = "dot bad";
+      text.textContent = "SSE indisponível";
+    }
+  }
+
+  document.getElementById("btnBuscar").addEventListener("click", async () => {
+    state.page = 1;
+    await fetchNotas().catch(err => toast(err.message));
+  });
+
+  document.getElementById("btnHoje").addEventListener("click", async () => {
+    setHoje();
+    await fetchNotas().catch(err => toast(err.message));
+  });
+
+  document.getElementById("btnXlsx").addEventListener("click", () => {
+    const url = buildRelatorioUrl();
+    window.open(url, "_blank");
+  });
+
+  document.getElementById("prev").addEventListener("click", async () => {
+    state.page = Math.max(1, state.page - 1);
+    await fetchNotas().catch(err => toast(err.message));
+  });
+
+  document.getElementById("next").addEventListener("click", async () => {
+    state.page = state.page + 1;
+    await fetchNotas().catch(err => toast(err.message));
+  });
+
+  setHoje();
+  fetchNotas().catch(err => toast(err.message));
+  connectSse();
+</script>
+</body>
+</html>

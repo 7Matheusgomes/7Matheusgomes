@@ -1,0 +1,15 @@
+# dependências
+**/node_modules/
+
+# segredos
+**/.env
+**/*.env
+site.env
+
+# logs / sistema
+*.log
+.DS_Store
+
+# arquivos gerados
+relatorios/
+*.xlsx

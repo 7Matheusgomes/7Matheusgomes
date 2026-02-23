@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Painel - Notas</title>
+  <style>
+    body{margin:0;font-family:system-ui,Segoe UI,Arial;background:#0b1020;color:#e8ecff}
+    .wrap{max-width:920px;margin:28px auto;padding:0 16px}
+    .card{background:#121a33;border:1px solid rgba(255,255,255,.12);border-radius:14px;padding:16px;margin:12px 0}
+    a{color:#6ea8fe;text-decoration:none;font-weight:700}
+    .muted{color:#aab3d6}
+    .grid{display:grid;grid-template-columns:repeat(3,minmax(220px,1fr));gap:12px}
+    @media(max-width:900px){.grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1 style="margin:0 0 6px">Painel de Notas</h1>
+    <div class="muted">Acesso rápido às páginas do sistema</div>
+
+    <div class="grid">
+      <div class="card">
+        <div style="font-size:16px;margin-bottom:6px">Financeiro</div>
+        <div class="muted">Listagem, filtros, deletar notas, baixar XLSX</div>
+        <div style="margin-top:10px"><a href="/financeiro">Abrir →</a></div>
+      </div>
+
+      <div class="card">
+        <div style="font-size:16px;margin-bottom:6px">Importar em massa</div>
+        <div class="muted">Subir vários PDFs e salvar automaticamente</div>
+        <div style="margin-top:10px"><a href="/importar.html">Abrir →</a></div>
+      </div>
+
+      <div class="card">
+        <div style="font-size:16px;margin-bottom:6px">Upload unitário</div>
+        <div class="muted">Página antiga (1 PDF por vez)</div>
+        <div style="margin-top:10px"><a href="/index.html">Abrir →</a></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="muted">Status</div>
+      <div id="health">Checando…</div>
+    </div>
+  </div>
+
+  <script>
+    fetch("/health")
+      .then(r => r.json())
+      .then(d => document.getElementById("health").textContent = d.ok ? "Online" : "Offline")
+      .catch(() => document.getElementById("health").textContent = "Offline");
+  </script>
+</body>
+</html>
